@@ -1,0 +1,278 @@
+:root {
+  --workspace-gap: 1rem;
+}
+
+body {
+  min-height: 100vh;
+}
+
+#app {
+  max-width: 1500px;
+  padding-block: 1.25rem 3rem;
+}
+
+.workspace-header,
+.tabs,
+.inline-controls,
+.model-row,
+.review-bar {
+  align-items: center;
+  display: flex;
+  gap: var(--workspace-gap);
+}
+
+.workspace-header,
+.review-bar {
+  justify-content: space-between;
+}
+
+.workspace-header h1,
+.workspace-header p,
+.account p,
+.message p,
+.result-card p {
+  margin-bottom: 0;
+}
+
+.account {
+  align-items: center;
+  display: grid;
+  gap: .35rem .75rem;
+  grid-template-columns: auto auto auto;
+  max-width: 42rem;
+}
+
+.account div:first-child {
+  display: grid;
+}
+
+.account > small,
+.account > .error {
+  grid-column: 1 / -1;
+}
+
+.compact,
+.favorite,
+.tabs button,
+.inline-controls button {
+  margin-bottom: 0;
+  width: auto;
+}
+
+.usage-chart {
+  align-items: end;
+  display: flex;
+  gap: 3px;
+  height: 30px;
+}
+
+.usage-chart i {
+  background: var(--pico-primary);
+  border-radius: 2px;
+  display: block;
+  min-height: 4px;
+  width: 7px;
+}
+
+.concurrency {
+  margin: 0;
+  max-width: 9rem;
+}
+
+.concurrency input {
+  margin: .25rem 0 0;
+}
+
+.tabs {
+  justify-content: start;
+  margin-block: 1.5rem;
+}
+
+.chat-layout,
+.media-layout {
+  display: grid;
+  gap: 1.5rem;
+  grid-template-columns: minmax(13rem, 20rem) minmax(0, 1fr);
+}
+
+.media-layout {
+  grid-template-columns: minmax(18rem, 25rem) minmax(0, 1fr);
+}
+
+.conversation-list nav {
+  display: grid;
+  gap: .5rem;
+  margin-top: 1rem;
+}
+
+.conversation-list nav button {
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.messages {
+  display: grid;
+  gap: .75rem;
+  max-height: 52vh;
+  min-height: 16rem;
+  overflow: auto;
+  padding: .25rem;
+}
+
+.message {
+  margin: 0;
+  max-width: 82%;
+  padding: .8rem 1rem;
+}
+
+.message.user {
+  justify-self: end;
+}
+
+.message.superseded {
+  opacity: .55;
+}
+
+.message img {
+  max-height: 16rem;
+  width: auto;
+}
+
+.model-row {
+  align-items: end;
+}
+
+.model-row label {
+  flex: 1;
+}
+
+.favorite {
+  font-size: 1.4rem;
+  margin-bottom: var(--pico-spacing);
+  padding-inline: .8rem;
+}
+
+.template-tools {
+  margin-bottom: var(--pico-spacing);
+}
+
+.template-tools .inline-controls {
+  align-items: end;
+  flex-wrap: wrap;
+  margin-top: .75rem;
+}
+
+.template-tools select {
+  flex: 1 1 14rem;
+  margin-bottom: 0;
+}
+
+.composer {
+  align-self: start;
+  position: sticky;
+  top: 1rem;
+}
+
+.result-grid,
+.library-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+}
+
+.result-card {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  min-width: 0;
+}
+
+.result-card img,
+.result-card video,
+.library-grid img,
+.library-grid video {
+  aspect-ratio: 1 / 1;
+  background: var(--pico-card-background-color);
+  object-fit: contain;
+  width: 100%;
+}
+
+.result-card footer {
+  flex-wrap: wrap;
+  margin-top: auto;
+}
+
+.status {
+  border-radius: 999px;
+  font-size: .8rem;
+  padding: .15rem .5rem;
+}
+
+.status.completed,
+.status.kept {
+  background: color-mix(in srgb, #2a9d60 20%, transparent);
+}
+
+.status.failed,
+.status.cancelled,
+.status.discarded {
+  background: color-mix(in srgb, #c33 18%, transparent);
+}
+
+.status.queued,
+.status.submitting,
+.status.submitted,
+.status.remote-queued,
+.status.running,
+.status.cancelling {
+  background: color-mix(in srgb, var(--pico-primary) 18%, transparent);
+}
+
+.error {
+  color: var(--pico-del-color);
+  font-size: .9rem;
+}
+
+.empty {
+  color: var(--pico-muted-color);
+  padding: 2rem;
+  text-align: center;
+}
+
+@media (max-width: 900px) {
+  .workspace-header,
+  .chat-layout,
+  .media-layout {
+    align-items: stretch;
+    grid-template-columns: 1fr;
+  }
+
+  .workspace-header {
+    display: grid;
+  }
+
+  .account {
+    grid-template-columns: 1fr auto;
+  }
+
+  .composer {
+    position: static;
+  }
+}
+
+@media (max-width: 560px) {
+  .inline-controls,
+  .model-row,
+  .review-bar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .inline-controls button,
+  .model-row button,
+  .review-bar button {
+    width: 100%;
+  }
+}

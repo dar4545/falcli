@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "jsx": "react-jsx",
+    "jsxImportSource": "preact",
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "noEmit": true,
+    "skipLibCheck": true,
+    "strict": false,
+    "target": "ES2024"
+  },
+  "include": ["src", "test", "vite.config.js"]
+}
