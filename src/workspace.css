@@ -204,6 +204,77 @@ body {
   margin-top: auto;
 }
 
+.file-field {
+  margin-bottom: var(--pico-spacing);
+  padding: .75rem;
+}
+
+.file-field > small {
+  display: block;
+  margin-bottom: .5rem;
+}
+
+.drop-zone {
+  border: 2px dashed var(--pico-muted-border-color);
+  border-radius: var(--pico-border-radius);
+  cursor: pointer;
+  display: grid;
+  gap: .5rem;
+  padding: 1rem;
+  text-align: center;
+}
+
+.drop-zone:focus-within,
+.drop-zone:hover {
+  border-color: var(--pico-primary);
+}
+
+.drop-zone input {
+  margin: 0;
+}
+
+.source-list {
+  display: grid;
+  gap: .5rem;
+  margin-top: .75rem;
+}
+
+.source-item {
+  align-items: center;
+  display: grid;
+  gap: .6rem;
+  grid-template-columns: 3.25rem minmax(0, 1fr) auto;
+  margin: 0;
+  padding: .5rem;
+}
+
+.source-item img {
+  aspect-ratio: 1;
+  object-fit: cover;
+  width: 3.25rem;
+}
+
+.source-item span {
+  display: grid;
+  min-width: 0;
+}
+
+.source-item strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.unassigned-row,
+.batch-sources {
+  margin-top: .75rem;
+}
+
+.unassigned-row .inline-controls {
+  flex-wrap: wrap;
+  margin-top: .35rem;
+}
+
 .status {
   border-radius: 999px;
   font-size: .8rem;
@@ -216,6 +287,7 @@ body {
 }
 
 .status.failed,
+.status.not-submitted,
 .status.cancelled,
 .status.discarded {
   background: color-mix(in srgb, #c33 18%, transparent);
@@ -233,6 +305,22 @@ body {
 .error {
   color: var(--pico-del-color);
   font-size: .9rem;
+}
+
+.model-warning {
+  border-left: .25rem solid #d99000;
+  font-size: .9rem;
+  padding-left: .75rem;
+}
+
+.failure-detail {
+  margin-bottom: var(--pico-spacing);
+}
+
+.failure-detail pre {
+  max-height: 14rem;
+  overflow: auto;
+  white-space: pre-wrap;
 }
 
 .empty {

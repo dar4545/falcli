@@ -1,6 +1,6 @@
 import { createReadStream } from "node:fs";
-import { access, copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
+import { access, copyFile, mkdir, open, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -69,17 +69,135 @@ function normalizeOpenRouter(payload) {
   }));
 }
 
-function normalizeFal(payload, favorites) {
-  return (payload.models ?? payload.data ?? []).map((model) => {
+function labelFor(name, schema) {
+  if (schema.title) return schema.title;
+  const words = name.replaceAll("_", " ");
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+function resolveSchema(document, schema) {
+  if (!schema?.$ref) return schema;
+  return schema.$ref
+    .replace(/^#\//, "")
+    .split("/")
+    .reduce((value, key) => value?.[key], document);
+}
+
+function inputSchema(model) {
+  const document = model.openapi ?? model.openapi_schema ?? model["openapi-3.0"];
+  if (!document) return null;
+  for (const pathItem of Object.values(document.paths ?? {})) {
+    for (const operation of Object.values(pathItem ?? {})) {
+      const schema = operation?.requestBody?.content?.["application/json"]?.schema;
+      if (schema) return resolveSchema(document, schema);
+    }
+  }
+  return (
+    document.components?.schemas?.Input ??
+    Object.entries(document.components?.schemas ?? {}).find(([name]) => name.endsWith("Input"))?.[1] ??
+    null
+  );
+}
+
+function fileField(name, schema, required) {
+  const stringField =
+    schema?.type === "string" ||
+    (schema?.type === "array" && schema.items?.type === "string");
+  const describedAsFile = /\b(?:file input|input file|upload(?:ed)? file)\b/i.test(
+    schema?.description ?? "",
+  );
+  if (!stringField || (!/_urls?$/.test(name) && !describedAsFile)) return null;
+  const hint = `${name.replaceAll("_", " ")} ${schema.title ?? ""} ${schema.description ?? ""}`.toLowerCase();
+  const mediaType = /\b(?:image|mask)\b/.test(hint)
+    ? "image"
+    : /\bvideo\b/.test(hint)
+      ? "video"
+      : /\baudio\b/.test(hint)
+        ? "audio"
+        : /\b(?:pdf|document)\b/.test(hint)
+          ? "document"
+          : "file";
+  return {
+    name,
+    label: labelFor(name, schema),
+    description: schema.description ?? "",
+    cardinality: schema.type === "array" ? "array" : "single",
+    required,
+    mediaType,
+  };
+}
+
+function modesFor(type, fields) {
+  const requiredFiles = fields.some((field) => field.required);
+  if (type === "image") {
+    return [
+      ...(!requiredFiles ? ["text-to-image"] : []),
+      ...(fields.length ? ["image-to-image"] : []),
+    ];
+  }
+  const image = fields.some((field) => field.mediaType === "image");
+  const video = fields.some((field) => field.mediaType === "video");
+  return [
+    ...(!requiredFiles ? ["text-to-video"] : []),
+    ...(image ? ["image-to-video"] : []),
+    ...(video ? ["video-to-video"] : []),
+    ...(image && video ? ["mixed-references-to-video"] : []),
+  ];
+}
+
+function normalizeFal(payload, favorites, type) {
+  return (payload.models ?? payload.data ?? []).flatMap((model) => {
     const metadata = model.metadata ?? {};
     const id = model.endpoint_id ?? model.id ?? model.model_id;
-    return {
+    const schema = inputSchema(model);
+    if (!schema) {
+      return [{
+        id,
+        name: metadata.display_name ?? model.name ?? id,
+        description: metadata.description ?? model.description ?? "",
+        thumbnail: metadata.thumbnail_url ?? model.thumbnail_url ?? model.thumbnail ?? "",
+        favorite: favorites.includes(id),
+        modes: [type === "image" ? "text-to-image" : "text-to-video"],
+        prompt: {
+          name: "prompt",
+          label: "Prompt",
+          description: "",
+          required: false,
+        },
+        fileFields: [],
+        schemaStatus: "unavailable",
+        warning: "Model schema is unavailable. Attachment modes require a retry.",
+      }];
+    }
+    const required = new Set(schema.required ?? []);
+    const properties = schema.properties ?? {};
+    const fields = Object.entries(properties).flatMap(([name, property]) => {
+      const field = fileField(name, property, required.has(name));
+      return field ? [field] : [];
+    });
+    const supported = new Set(["prompt", ...fields.map((field) => field.name)]);
+    if ([...required].some((name) => !supported.has(name))) return [];
+    const promptSchema = properties.prompt;
+    if (required.has("prompt") && promptSchema?.type !== "string") return [];
+    return [{
       id,
       name: metadata.display_name ?? model.name ?? id,
       description: metadata.description ?? model.description ?? "",
       thumbnail: metadata.thumbnail_url ?? model.thumbnail_url ?? model.thumbnail ?? "",
       favorite: favorites.includes(id),
-    };
+      modes: modesFor(type, fields),
+      prompt:
+        promptSchema?.type === "string"
+          ? {
+              name: "prompt",
+              label: labelFor("prompt", promptSchema),
+              description: promptSchema.description ?? "",
+              required: required.has("prompt"),
+            }
+          : null,
+      fileFields: fields,
+      schemaStatus: "ready",
+    }];
   });
 }
 
@@ -125,6 +243,26 @@ function findMediaUrl(value) {
   return "";
 }
 
+function mediaFailure(error) {
+  const status = Number(
+    error?.status ?? error?.statusCode ?? error?.response?.status,
+  );
+  const message =
+    (error instanceof Error && error.message) ||
+    error?.message ||
+    "Generation failed";
+  const details =
+    error?.details ??
+    error?.body ??
+    error?.response?.data ??
+    error?.response?.body;
+  return {
+    ...(Number.isFinite(status) && { status }),
+    message,
+    ...(details !== undefined && { details }),
+  };
+}
+
 function extensionFor(contentType, url) {
   const known = {
     "image/jpeg": ".jpg",
@@ -139,8 +277,34 @@ function extensionFor(contentType, url) {
 }
 
 function publicResult(result) {
-  const { filePath, ...visible } = result;
+  const { filePath, input, ...visible } = result;
   return visible;
+}
+
+function publicMediaSource(source) {
+  const { batchIds, filePath, removed, ...visible } = source;
+  return visible;
+}
+
+function sourceProvenance(source) {
+  return {
+    name: source.name,
+    type: source.type,
+    size: source.size,
+    hash: source.hash,
+    ...(Number.isFinite(source.duration) && { duration: source.duration }),
+  };
+}
+
+function sourceFieldProvenance(sourceFields) {
+  return Object.fromEntries(
+    Object.entries(sourceFields ?? {}).map(([field, assigned]) => [
+      field,
+      Array.isArray(assigned)
+        ? assigned.map(sourceProvenance)
+        : sourceProvenance(assigned),
+    ]),
+  );
 }
 
 function publicConversation(conversation) {
@@ -206,7 +370,10 @@ export async function createWorkspaceServer(options = {}) {
   const env = options.env ?? process.env;
   const adapters = options.adapters ?? defaultAdapters;
   const now = options.now ?? (() => new Date());
+  const maxSourceBytes = options.sourceLimits?.fileBytes ?? 1024 ** 3;
+  const maxBatchSourceBytes = options.sourceLimits?.batchBytes ?? 2 * 1024 ** 3;
   const tempDir = path.join(root, "temp");
+  const mediaSourceDir = path.join(tempDir, "media-sources");
   const libraryDir = path.join(root, "library");
   const preferencesFile = path.join(libraryDir, "state", "preferences.json");
   const templatesFile = path.join(libraryDir, "state", "templates.json");
@@ -237,21 +404,79 @@ export async function createWorkspaceServer(options = {}) {
   const defaultPreferences = {
     favorites: { image: [], video: [] },
     selections: { text: "", image: "", video: "" },
+    modes: { image: "text-to-image", video: "text-to-video" },
+    modeSelections: { image: {}, video: {} },
     concurrency: 2,
   };
+  function normalizePreferences(value = {}) {
+    const selections = {
+      text: String(value.selections?.text ?? ""),
+      image: String(value.selections?.image ?? ""),
+      video: String(value.selections?.video ?? ""),
+    };
+    const modes = {
+      image: String(value.modes?.image ?? "text-to-image"),
+      video: String(value.modes?.video ?? "text-to-video"),
+    };
+    const selectionMap = (type) => {
+      const saved = Object.fromEntries(
+        Object.entries(value.modeSelections?.[type] ?? {}).map(([mode, model]) => [
+          mode,
+          String(model ?? ""),
+        ]),
+      );
+      if (!Object.keys(saved).length && selections[type]) saved[modes[type]] = selections[type];
+      return saved;
+    };
+    return {
+      favorites: {
+        image: Array.isArray(value.favorites?.image) ? value.favorites.image : [],
+        video: Array.isArray(value.favorites?.video) ? value.favorites.video : [],
+      },
+      selections,
+      modes,
+      modeSelections: {
+        image: selectionMap("image"),
+        video: selectionMap("video"),
+      },
+      concurrency: Math.max(1, Math.min(20, Number(value.concurrency) || 2)),
+    };
+  }
   let lastAccount = null;
   const conversations = new Map(
     (await loadKeptConversations(libraryDir)).map((conversation) => [conversation.id, conversation]),
   );
   const results = new Map((await loadKeptResults(libraryDir)).map((result) => [result.id, result]));
+  const mediaSources = new Map();
   const textCapabilities = new Map();
+  const falCatalogs = new Map();
   const batches = new Map();
   const eventClients = new Set();
-  const initialPreferences = await readJson(preferencesFile, defaultPreferences);
+  const initialPreferences = normalizePreferences(
+    await readJson(preferencesFile, defaultPreferences),
+  );
 
   function notifyResult(result) {
     const event = `event: result\ndata: ${JSON.stringify(publicResult(result))}\n\n`;
     for (const client of eventClients) client.write(event);
+  }
+
+  function stopUnsentBatchResults(rejected, failure) {
+    if (!rejected.batchId || ![400, 422].includes(failure.status)) return;
+    const batch = batches.get(rejected.batchId);
+    if (!batch) return;
+    for (const id of batch.resultIds) {
+      if (id === rejected.id) continue;
+      const result = results.get(id);
+      if (!result || !pool.cancel(id)) continue;
+      result.state = "not-submitted";
+      result.error = "Not submitted — same payload rejected by FAL";
+      result.failure = {
+        ...failure,
+        message: result.error,
+      };
+      notifyResult(result);
+    }
   }
 
   async function runMediaResult(result) {
@@ -260,6 +485,7 @@ export async function createWorkspaceServer(options = {}) {
     try {
       const generated = await adapters.generateMedia({
         endpoint: result.model,
+        input: result.input ?? { prompt: result.prompt },
         key: env.FAL_KEY,
         prompt: result.prompt,
         onState(update) {
@@ -282,8 +508,11 @@ export async function createWorkspaceServer(options = {}) {
       result.state = "completed";
     } catch (error) {
       if (result.state !== "cancelled") {
+        const failure = mediaFailure(error);
         result.state = "failed";
-        result.error = error instanceof Error ? error.message : "Generation failed";
+        result.error = failure.message;
+        result.failure = failure;
+        stopUnsentBatchResults(result, failure);
       }
     }
     notifyResult(result);
@@ -302,6 +531,9 @@ export async function createWorkspaceServer(options = {}) {
     await copyFile(result.filePath, durablePath);
     const metadata = {
       ...publicResult(result),
+      ...(result.sourceFields && {
+        sourceFields: sourceFieldProvenance(result.sourceFields),
+      }),
       filename,
       state: "kept",
       keptAt: now().toISOString(),
@@ -314,6 +546,7 @@ export async function createWorkspaceServer(options = {}) {
       fileUrl: `/api/results/${result.id}/file`,
     });
     notifyResult(result);
+    await cleanupBatchSources(result.batchId);
     return result;
   }
 
@@ -324,14 +557,143 @@ export async function createWorkspaceServer(options = {}) {
     result.fileUrl = "";
     result.state = "discarded";
     notifyResult(result);
+    await cleanupBatchSources(result.batchId);
     return result;
   }
 
   function publicBatch(batch) {
+    const {
+      input,
+      promptProvided,
+      resultIds,
+      sourceAssignments,
+      sourceIds,
+      uploads,
+      ...visible
+    } = batch;
     return {
-      ...batch,
+      ...visible,
       results: batch.resultIds.map((id) => publicResult(results.get(id))),
     };
+  }
+
+  async function uploadMediaSource(source) {
+    const stored = await adapters.uploadMediaSource({
+      filePath: source.filePath,
+      hash: source.hash,
+      key: env.FAL_KEY,
+      lifecycle: { expiresIn: "1d" },
+      name: source.name,
+      size: source.size,
+      type: source.type,
+    });
+    const uploadedAt = now();
+    return {
+      url: typeof stored === "string" ? stored : stored.url,
+      uploadedAt: uploadedAt.toISOString(),
+      expiresAt: new Date(uploadedAt.getTime() + 24 * 60 * 60 * 1_000).toISOString(),
+    };
+  }
+
+  async function cleanupBatchSources(batchId) {
+    if (!batchId) return;
+    const batch = batches.get(batchId);
+    if (
+      !batch ||
+      batch.sourcesCleaned ||
+      batch.resultIds.some(
+        (id) => !["kept", "discarded", "cancelled"].includes(results.get(id)?.state),
+      )
+    ) {
+      return;
+    }
+    batch.sourcesCleaned = true;
+    batch.sourceFields = sourceFieldProvenance(batch.sourceFields);
+    for (const id of batch.resultIds) {
+      const result = results.get(id);
+      if (result?.sourceFields) result.sourceFields = sourceFieldProvenance(result.sourceFields);
+    }
+    for (const sourceId of batch.sourceIds) {
+      const source = mediaSources.get(sourceId);
+      if (!source) continue;
+      source.batchIds?.delete(batch.id);
+      if (source.batchIds?.size) continue;
+      await rm(source.filePath, { force: true });
+      mediaSources.delete(source.id);
+    }
+    for (const id of batch.resultIds) {
+      const result = results.get(id);
+      if (result) notifyResult(result);
+    }
+  }
+
+  async function refreshExpiredBatchInput(batch) {
+    const currentTime = now().getTime();
+    if (
+      ![...batch.uploads.values()].some(
+        (upload) => Date.parse(upload.expiresAt) <= currentTime,
+      )
+    ) {
+      return batch.input;
+    }
+    const uniqueSources = new Map();
+    for (const sourceId of batch.sourceIds) {
+      const source = mediaSources.get(sourceId);
+      if (!source) {
+        throw Object.assign(
+          new Error(
+            "Temporary source files are no longer available; this result cannot be retried",
+          ),
+          { code: "SOURCE_UNAVAILABLE" },
+        );
+      }
+      try {
+        await access(source.filePath);
+      } catch {
+        throw Object.assign(
+          new Error(
+            "Temporary source files are no longer available; this result cannot be retried",
+          ),
+          { code: "SOURCE_UNAVAILABLE" },
+        );
+      }
+      uniqueSources.set(source.hash, source);
+    }
+    for (const [hash, source] of uniqueSources) {
+      const current = batch.uploads.get(hash);
+      if (current && Date.parse(current.expiresAt) > currentTime) continue;
+      batch.uploads.set(hash, await uploadMediaSource(source));
+    }
+    const input = {};
+    if (batch.promptProvided) input.prompt = batch.prompt;
+    for (const [field, assigned] of Object.entries(batch.sourceAssignments)) {
+      const ids = Array.isArray(assigned) ? assigned : [assigned];
+      const urls = ids.map((id) => batch.uploads.get(mediaSources.get(id).hash).url);
+      input[field] = Array.isArray(assigned) ? Object.freeze(urls) : urls[0];
+    }
+    batch.input = Object.freeze(input);
+    return batch.input;
+  }
+
+  async function availableEditSourceFields(batch) {
+    if (!batch || batch.sourcesCleaned) return {};
+    const sourceFields = {};
+    for (const [field, assigned] of Object.entries(batch.sourceAssignments)) {
+      const ids = Array.isArray(assigned) ? assigned : [assigned];
+      const available = [];
+      for (const id of ids) {
+        const source = mediaSources.get(id);
+        if (!source) continue;
+        try {
+          await access(source.filePath);
+          available.push(publicMediaSource(source));
+        } catch {}
+      }
+      if (available.length) {
+        sourceFields[field] = Array.isArray(assigned) ? available : available[0];
+      }
+    }
+    return sourceFields;
   }
 
   const pool = createWorkPool({
@@ -470,31 +832,183 @@ export async function createWorkspaceServer(options = {}) {
         request.on("close", () => eventClients.delete(response));
         return;
       }
+      if (url.pathname === "/api/media-sources" && request.method === "POST") {
+        const declaredSize = Number(request.headers["content-length"] ?? 0);
+        if (declaredSize > maxSourceBytes) {
+          return sendJson(response, 413, { error: "Source files are limited to 1 GiB each" });
+        }
+        const id = randomUUID();
+        const name = String(url.searchParams.get("name") ?? "source");
+        const type = String(request.headers["content-type"] ?? "application/octet-stream");
+        const duration = url.searchParams.has("duration")
+          ? Number(url.searchParams.get("duration"))
+          : null;
+        await mkdir(mediaSourceDir, { recursive: true });
+        const filePath = path.join(mediaSourceDir, id);
+        const handle = await open(filePath, "wx");
+        const hash = createHash("sha256");
+        let size = 0;
+        let streamError = null;
+        try {
+          for await (const chunk of request) {
+            size += chunk.length;
+            if (size > maxSourceBytes) throw new Error("Source files are limited to 1 GiB each");
+            hash.update(chunk);
+            await handle.write(chunk);
+          }
+        } catch (error) {
+          streamError = error;
+        } finally {
+          await handle.close();
+        }
+        if (streamError) {
+          await rm(filePath, { force: true });
+          if (size > maxSourceBytes) {
+            return sendJson(response, 413, { error: "Source files are limited to 1 GiB each" });
+          }
+          throw streamError;
+        }
+        if (!size) {
+          await rm(filePath, { force: true });
+          return sendJson(response, 400, { error: "Source file must not be empty" });
+        }
+        const source = {
+          id,
+          name,
+          type,
+          size,
+          hash: hash.digest("hex"),
+          filePath,
+          fileUrl: `/api/media-sources/${id}/file`,
+          state: "Local",
+          ...(Number.isFinite(duration) && duration >= 0 && { duration }),
+        };
+        mediaSources.set(id, source);
+        return sendJson(response, 201, publicMediaSource(source));
+      }
+      const mediaSourceFileMatch = url.pathname.match(/^\/api\/media-sources\/([^/]+)\/file$/);
+      if (mediaSourceFileMatch && request.method === "GET") {
+        const source = mediaSources.get(mediaSourceFileMatch[1]);
+        if (!source) return sendJson(response, 404, { error: "Media source not found" });
+        response.writeHead(200, { "content-type": source.type });
+        return createReadStream(source.filePath).pipe(response);
+      }
+      const mediaSourceMatch = url.pathname.match(/^\/api\/media-sources\/([^/]+)$/);
+      if (mediaSourceMatch && request.method === "DELETE") {
+        const source = mediaSources.get(mediaSourceMatch[1]);
+        if (!source) return sendJson(response, 404, { error: "Media source not found" });
+        if (source.batchIds?.size) {
+          source.removed = true;
+          response.writeHead(204);
+          return response.end();
+        }
+        await rm(source.filePath, { force: true });
+        mediaSources.delete(source.id);
+        response.writeHead(204);
+        return response.end();
+      }
       if (url.pathname === "/api/batches" && request.method === "POST") {
         if (!env.FAL_KEY) return sendJson(response, 503, { error: readiness.generation.message });
         const input = await readBody(request);
         const type = input.type === "video" ? "video" : input.type === "image" ? "image" : "";
         const model = String(input.model ?? "").trim();
-        const prompt = String(input.prompt ?? "").trim();
+        const promptProvided = Object.hasOwn(input, "prompt");
+        const prompt = String(input.prompt ?? "");
         const quantity = Math.max(1, Math.min(50, Math.floor(Number(input.quantity) || 0)));
-        if (!type || !model || !prompt || !quantity) {
-          return sendJson(response, 400, { error: "Type, model, prompt, and quantity are required" });
+        if (!type || !model || !quantity) {
+          return sendJson(response, 400, { error: "Type, model, and quantity are required" });
         }
+        const sourceFields = {};
+        const uniqueSources = new Map();
+        for (const [field, assigned] of Object.entries(input.sourceFields ?? {})) {
+          const ids = Array.isArray(assigned) ? assigned : [assigned];
+          const assignedSources = ids.map((id) => mediaSources.get(String(id)));
+          if (assignedSources.some((source) => !source)) {
+            return sendJson(response, 400, { error: `A staged source for ${field} was not found` });
+          }
+          sourceFields[field] = Array.isArray(assigned)
+            ? assignedSources.map(publicMediaSource)
+            : publicMediaSource(assignedSources[0]);
+          for (const source of assignedSources) uniqueSources.set(source.hash, source);
+        }
+        const batchSourceBytes = [...uniqueSources.values()].reduce(
+          (total, source) => total + source.size,
+          0,
+        );
+        if (batchSourceBytes > maxBatchSourceBytes) {
+          return sendJson(response, 413, {
+            error: "Unique source files are limited to 2 GiB per Batch",
+          });
+        }
+        const uploaded = new Map();
+        for (const [hash, source] of uniqueSources) {
+          try {
+            await access(source.filePath);
+            source.state = "Uploading";
+            const upload = await uploadMediaSource(source);
+            source.state = "Uploaded";
+            uploaded.set(hash, upload);
+          } catch (error) {
+            source.state = "Failed";
+            return sendJson(response, 502, {
+              error: error instanceof Error ? error.message : "Source upload failed",
+            });
+          }
+        }
+        const generationInput = {};
+        if (promptProvided) generationInput.prompt = prompt;
+        for (const [field, assigned] of Object.entries(input.sourceFields ?? {})) {
+          const ids = Array.isArray(assigned) ? assigned : [assigned];
+          const urls = ids.map((id) => uploaded.get(mediaSources.get(String(id)).hash).url);
+          generationInput[field] = Array.isArray(assigned) ? Object.freeze(urls) : urls[0];
+          const assignedSources = ids.map((id) => mediaSources.get(String(id)));
+          sourceFields[field] = Array.isArray(assigned)
+            ? assignedSources.map(publicMediaSource)
+            : publicMediaSource(assignedSources[0]);
+        }
+        Object.freeze(generationInput);
         const batch = {
           id: randomUUID(),
           type,
+          mode: String(
+            input.mode ?? (type === "image" ? "text-to-image" : "text-to-video"),
+          ),
           model,
           prompt,
+          promptProvided,
           quantity,
+          sourceFields,
+          sourceAssignments: Object.fromEntries(
+            Object.entries(input.sourceFields ?? {}).map(([field, assigned]) => [
+              field,
+              Array.isArray(assigned) ? assigned.map(String) : String(assigned),
+            ]),
+          ),
+          sourceIds: [...new Set(
+            Object.values(input.sourceFields ?? {}).flatMap((assigned) =>
+              (Array.isArray(assigned) ? assigned : [assigned]).map(String),
+            ),
+          )],
+          input: generationInput,
+          uploads: uploaded,
           createdAt: now().toISOString(),
           resultIds: [],
         };
+        for (const sourceId of batch.sourceIds) {
+          const source = mediaSources.get(sourceId);
+          if (!source) continue;
+          source.batchIds ??= new Set();
+          source.batchIds.add(batch.id);
+        }
         const queued = Array.from({ length: quantity }, () => ({
           id: randomUUID(),
           batchId: batch.id,
           type,
+          mode: batch.mode,
           model,
           prompt,
+          input: generationInput,
+          sourceFields,
           state: "queued",
           requestId: "",
           createdAt: now().toISOString(),
@@ -547,6 +1061,20 @@ export async function createWorkspaceServer(options = {}) {
         });
         return createReadStream(result.filePath).pipe(response);
       }
+      const editInputMatch = url.pathname.match(/^\/api\/results\/([^/]+)\/edit-input$/);
+      if (editInputMatch && request.method === "GET") {
+        const result = results.get(editInputMatch[1]);
+        if (!result) return sendJson(response, 404, { error: "Result not found" });
+        return sendJson(response, 200, {
+          type: result.type,
+          mode:
+            result.mode ??
+            (result.type === "image" ? "text-to-image" : "text-to-video"),
+          model: result.model,
+          prompt: result.prompt,
+          sourceFields: await availableEditSourceFields(batches.get(result.batchId)),
+        });
+      }
       const cancelMatch = url.pathname.match(/^\/api\/results\/([^/]+)\/cancel$/);
       if (cancelMatch && request.method === "POST") {
         const result = results.get(cancelMatch[1]);
@@ -555,6 +1083,7 @@ export async function createWorkspaceServer(options = {}) {
         if (queued) {
           result.state = "cancelled";
           notifyResult(result);
+          await cleanupBatchSources(result.batchId);
           return sendJson(response, 200, publicResult(result));
         }
         if (!["submitting", "submitted", "remote-queued", "running"].includes(result.state)) {
@@ -572,6 +1101,7 @@ export async function createWorkspaceServer(options = {}) {
             requestId: result.requestId,
           });
           result.state = "cancelled";
+          await cleanupBatchSources(result.batchId);
         } catch (error) {
           result.state = "failed";
           result.error = error instanceof Error ? error.message : "Cancellation failed";
@@ -583,16 +1113,30 @@ export async function createWorkspaceServer(options = {}) {
       if (retryMatch && request.method === "POST") {
         const original = results.get(retryMatch[1]);
         if (!original) return sendJson(response, 404, { error: "Result not found" });
-        if (original.state !== "failed") {
-          return sendJson(response, 409, { error: "Only failed results can be retried" });
+        if (!["failed", "not-submitted"].includes(original.state)) {
+          return sendJson(response, 409, {
+            error: "Only failed or not-submitted results can be retried",
+          });
+        }
+        let retryInput = original.input;
+        const batch = batches.get(original.batchId);
+        try {
+          retryInput = (batch && await refreshExpiredBatchInput(batch)) ?? retryInput;
+        } catch (error) {
+          return sendJson(response, error?.code === "SOURCE_UNAVAILABLE" ? 409 : 502, {
+            error: error instanceof Error ? error.message : "Source upload failed",
+          });
         }
         const retry = {
           id: randomUUID(),
           attemptOf: original.id,
           batchId: original.batchId ?? "",
           type: original.type,
+          mode: original.mode,
           model: original.model,
           prompt: original.prompt,
+          input: retryInput,
+          sourceFields: original.sourceFields,
           state: "queued",
           requestId: "",
           createdAt: now().toISOString(),
@@ -809,23 +1353,16 @@ export async function createWorkspaceServer(options = {}) {
       }
       if (url.pathname === "/api/preferences") {
         if (request.method === "GET") {
-          return sendJson(response, 200, await readJson(preferencesFile, defaultPreferences));
+          return sendJson(
+            response,
+            200,
+            normalizePreferences(await readJson(preferencesFile, defaultPreferences)),
+          );
         }
         if (request.method === "PUT") {
           const value = await readBody(request);
-          await writeJson(preferencesFile, {
-            favorites: {
-              image: Array.isArray(value.favorites?.image) ? value.favorites.image : [],
-              video: Array.isArray(value.favorites?.video) ? value.favorites.video : [],
-            },
-            selections: {
-              text: String(value.selections?.text ?? ""),
-              image: String(value.selections?.image ?? ""),
-              video: String(value.selections?.video ?? ""),
-            },
-            concurrency: Math.max(1, Math.min(20, Number(value.concurrency) || 2)),
-          });
-          const saved = await readJson(preferencesFile, defaultPreferences);
+          await writeJson(preferencesFile, normalizePreferences(value));
+          const saved = normalizePreferences(await readJson(preferencesFile, defaultPreferences));
           pool.setConcurrency(saved.concurrency);
           return sendJson(response, 200, saved);
         }
@@ -868,13 +1405,40 @@ export async function createWorkspaceServer(options = {}) {
           });
         }
         if (!env.FAL_KEY) return sendJson(response, 503, { error: readiness.generation.message });
-        const preferences = await readJson(preferencesFile, defaultPreferences);
-        const payload = await adapters.listFalModels({
-          category: type === "image" ? "text-to-image" : "text-to-video",
-          key: env.FAL_KEY,
-        });
+        const preferences = normalizePreferences(
+          await readJson(preferencesFile, defaultPreferences),
+        );
+        if (url.searchParams.get("refresh") === "1") falCatalogs.delete(type);
+        let catalog = falCatalogs.get(type);
+        if (!catalog) {
+          const categories =
+            type === "image"
+              ? ["text-to-image", "image-to-image"]
+              : ["text-to-video", "image-to-video", "video-to-video"];
+          try {
+            catalog = {
+              payload: await adapters.listFalModels({
+                categories,
+                category: categories[0],
+                expand: "openapi-3.0",
+                key: env.FAL_KEY,
+              }),
+            };
+          } catch (error) {
+            catalog = {
+              payload: await adapters.listFalModels({
+                categories,
+                category: categories[0],
+                key: env.FAL_KEY,
+              }),
+              warning: error instanceof Error ? error.message : "Model schema is unavailable",
+            };
+          }
+          falCatalogs.set(type, catalog);
+        }
+        const payload = catalog.payload;
         const query = (url.searchParams.get("search") ?? "").trim().toLowerCase();
-        const models = normalizeFal(payload, preferences.favorites[type])
+        const models = normalizeFal(payload, preferences.favorites[type], type)
           .filter(
             (model) =>
               !query ||
@@ -883,7 +1447,14 @@ export async function createWorkspaceServer(options = {}) {
               model.description.toLowerCase().includes(query),
           )
           .sort((a, b) => Number(b.favorite) - Number(a.favorite) || a.name.localeCompare(b.name));
-        return sendJson(response, 200, { models });
+        const unavailable = models.some((model) => model.schemaStatus === "unavailable");
+        return sendJson(response, 200, {
+          models,
+          ...((catalog.warning || unavailable) && {
+            warning: catalog.warning ?? "Some model schemas are unavailable.",
+            retry: `/api/models/${type}?refresh=1`,
+          }),
+        });
       }
       if (request.method !== "GET" && request.method !== "HEAD") {
         return sendJson(response, 405, { error: "Method not allowed" });

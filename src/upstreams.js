@@ -1,3 +1,5 @@
+import { openAsBlob } from "node:fs";
+
 import { createFalClient } from "@fal-ai/client";
 
 async function checkedJson(response) {
@@ -19,10 +21,10 @@ export const defaultAdapters = {
     await client.queue.cancel(endpoint, { requestId });
   },
 
-  async generateMedia({ endpoint, key, onState, prompt }) {
+  async generateMedia({ endpoint, input, key, onState }) {
     const client = createFalClient({ credentials: key });
     return client.subscribe(endpoint, {
-      input: { prompt },
+      input,
       logs: true,
       onEnqueue(requestId) {
         onState({ state: "submitted", requestId });
@@ -33,6 +35,12 @@ export const defaultAdapters = {
         });
       },
     });
+  },
+
+  async uploadMediaSource({ filePath, key, lifecycle, type }) {
+    const client = createFalClient({ credentials: key });
+    const blob = await openAsBlob(filePath, { type });
+    return client.storage.upload(blob, { lifecycle });
   },
 
   async downloadMedia({ url }) {
@@ -86,15 +94,27 @@ export const defaultAdapters = {
     );
   },
 
-  async listFalModels({ category, key }) {
-    const url = new URL("https://api.fal.ai/v1/models");
-    url.searchParams.set("category", category);
-    url.searchParams.set("status", "active");
-    return checkedJson(
-      await fetch(url, {
-        headers: { authorization: `Key ${key}` },
+  async listFalModels({ categories, category, expand, key }) {
+    const payloads = await Promise.all(
+      (categories ?? [category]).map(async (value) => {
+        const url = new URL("https://api.fal.ai/v1/models");
+        url.searchParams.set("category", value);
+        url.searchParams.set("status", "active");
+        if (expand) url.searchParams.set("expand", expand);
+        return checkedJson(
+          await fetch(url, {
+            headers: { authorization: `Key ${key}` },
+          }),
+        );
       }),
     );
+    const models = new Map();
+    for (const payload of payloads) {
+      for (const model of payload.models ?? payload.data ?? []) {
+        models.set(model.endpoint_id ?? model.id ?? model.model_id, model);
+      }
+    }
+    return { models: [...models.values()] };
   },
 
   async getBilling({ key }) {
