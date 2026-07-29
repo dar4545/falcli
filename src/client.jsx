@@ -241,7 +241,7 @@ function ChatWorkspace({
   reloadTemplates,
 }) {
   const [prompt, setPrompt] = useState("");
-  const [attachment, setAttachment] = useState(null);
+  const [attachments, setAttachments] = useState([]);
   const [busy, setBusy] = useState(false);
   const [draft, setDraft] = useState("");
   const [localError, setLocalError] = useState("");
@@ -271,7 +271,7 @@ function ChatWorkspace({
 
   async function send(event) {
     event.preventDefault();
-    if ((!prompt.trim() && !attachment) || busy) return;
+    if ((!prompt.trim() && !attachments.length) || busy) return;
     setBusy(true);
     setLocalError("");
     try {
@@ -287,10 +287,12 @@ function ChatWorkspace({
       }
       const body = {
         content: prompt,
-        ...(attachment && { attachment: await fileAsAttachment(attachment) }),
+        ...(attachments.length && {
+          attachments: await Promise.all(attachments.map(fileAsAttachment)),
+        }),
       };
       setPrompt("");
-      setAttachment(null);
+      setAttachments([]);
       if (fileRef.current) fileRef.current.value = "";
       await consume(
         await fetch(`/api/conversations/${id}/messages`, {
@@ -357,7 +359,13 @@ function ChatWorkspace({
             <article class={`message ${message.role} ${message.superseded ? "superseded" : ""}`}>
               <header>{message.role === "assistant" ? "Assistant" : "You"}{message.superseded ? " · replaced" : ""}</header>
               <p>{message.content}</p>
-              {message.attachments?.map((item) => <img alt={item.name} loading="lazy" src={item.fileUrl} />)}
+              {message.attachments?.map((item) =>
+                item.type?.startsWith("image/") ? (
+                  <img alt={item.name} loading="lazy" src={item.fileUrl} />
+                ) : (
+                  <p><a download={item.name} href={item.fileUrl}>{item.name}</a></p>
+                ),
+              )}
             </article>
           ))}
           {draft && <article class="message assistant"><header>Assistant · streaming</header><p>{draft}</p></article>}
@@ -370,16 +378,16 @@ function ChatWorkspace({
             <textarea onInput={(event) => setPrompt(event.currentTarget.value)} rows={4} value={prompt} />
           </label>
           <label>
-            Image attachment (PNG, JPEG, or WebP)
+            Attachments (any file type)
             <input
-              accept="image/png,image/jpeg,image/webp"
-              onChange={(event) => setAttachment(event.currentTarget.files?.[0] || null)}
+              multiple
+              onChange={(event) => setAttachments(Array.from(event.currentTarget.files ?? []))}
               ref={fileRef}
               type="file"
             />
           </label>
           <div class="inline-controls">
-            <button disabled={busy || (!prompt.trim() && !attachment) || !preferences.selections.text}>Send</button>
+            <button disabled={busy || (!prompt.trim() && !attachments.length) || !preferences.selections.text}>Send</button>
             <button class="secondary outline" disabled={busy || !conversation?.messages.some((message) => message.role === "assistant" && !message.superseded)} onClick={regenerate} type="button">Regenerate</button>
             <button class="secondary outline" disabled={!conversation || conversation.kept} onClick={keep} type="button">Keep Conversation</button>
             <button class="contrast outline" disabled={!conversation} onClick={discard} type="button">Discard Conversation</button>

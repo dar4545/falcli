@@ -712,10 +712,21 @@ export async function createWorkspaceServer(options = {}) {
       if (message.content) content.push({ type: "text", text: message.content });
       for (const attachment of message.attachments) {
         const data = await readFile(attachment.filePath, "base64");
-        content.push({
-          type: "image_url",
-          image_url: { url: `data:${attachment.type};base64,${data}` },
-        });
+        const dataUrl = `data:${attachment.type};base64,${data}`;
+        content.push(
+          attachment.type.startsWith("image/")
+            ? {
+                type: "image_url",
+                image_url: { url: dataUrl },
+              }
+            : {
+                type: "file",
+                file: {
+                  filename: attachment.name,
+                  file_data: dataUrl,
+                },
+              },
+        );
       }
       context.push({ role: "user", content });
     }
@@ -1291,24 +1302,30 @@ export async function createWorkspaceServer(options = {}) {
         if (!conversation) return sendJson(response, 404, { error: "Conversation not found" });
         const input = await readBody(request);
         const content = String(input.content ?? "").trim();
-        const attachmentInput = input.attachment;
-        if (!content && !attachmentInput) {
-          return sendJson(response, 400, { error: "Message or image is required" });
+        const attachmentInputs = Array.isArray(input.attachments)
+          ? input.attachments
+          : input.attachment
+            ? [input.attachment]
+            : [];
+        if (!content && !attachmentInputs.length) {
+          return sendJson(response, 400, { error: "Message or attachment is required" });
         }
         const attachments = [];
-        if (attachmentInput) {
-          const allowed = new Set(["image/jpeg", "image/png", "image/webp"]);
-          const type = String(attachmentInput.type ?? "").toLowerCase();
-          if (!allowed.has(type)) {
-            return sendJson(response, 415, { error: "Attach a PNG, JPEG, or WebP image." });
-          }
-          if (textCapabilities.get(conversation.model)?.supportsImages === false) {
+        for (const attachmentInput of attachmentInputs) {
+          const type =
+            String(attachmentInput.type ?? "").trim().toLowerCase() ||
+            "application/octet-stream";
+          if (
+            type.startsWith("image/") &&
+            textCapabilities.get(conversation.model)?.supportsImages === false
+          ) {
             return sendJson(response, 409, {
               error: "The selected model does not advertise image input support.",
             });
           }
           const bytes = Buffer.from(String(attachmentInput.data ?? ""), "base64");
-          const valid =
+          const validatedImageTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
+          const validImage =
             (type === "image/png" &&
               bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) ||
             (type === "image/jpeg" &&
@@ -1316,16 +1333,22 @@ export async function createWorkspaceServer(options = {}) {
             (type === "image/webp" &&
               bytes.subarray(0, 4).toString() === "RIFF" &&
               bytes.subarray(8, 12).toString() === "WEBP");
-          if (!valid) return sendJson(response, 415, { error: "The attached image data is invalid." });
+          if (validatedImageTypes.has(type) && !validImage) {
+            return sendJson(response, 415, { error: "The attached image data is invalid." });
+          }
           const attachmentId = randomUUID();
-          const extension = type === "image/jpeg" ? ".jpg" : type === "image/png" ? ".png" : ".webp";
+          const name = String(attachmentInput.name ?? "attachment");
+          const requestedExtension = path.extname(name);
+          const extension = /^\.[a-z0-9]{1,16}$/i.test(requestedExtension)
+            ? requestedExtension
+            : "";
           const directory = path.join(tempDir, "attachments", conversation.id);
           await mkdir(directory, { recursive: true });
           const filePath = path.join(directory, `${attachmentId}${extension}`);
           await writeFile(filePath, bytes);
           attachments.push({
             id: attachmentId,
-            name: String(attachmentInput.name ?? `attachment${extension}`),
+            name,
             type,
             filePath,
             fileUrl: `/api/conversations/${conversation.id}/attachments/${attachmentId}`,

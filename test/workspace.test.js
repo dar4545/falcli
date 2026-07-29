@@ -373,8 +373,8 @@ test("validated Chat images and whole kept Conversations survive restart", async
 
   const invalid = await fetch(`${address}/api/conversations/${conversation.id}/messages`, {
     body: JSON.stringify({
-      content: "bad file",
-      attachment: { name: "note.txt", type: "text/plain", data: "aGVsbG8=" },
+      content: "bad image",
+      attachment: { name: "image.png", type: "image/png", data: "aGVsbG8=" },
     }),
     headers: { "content-type": "application/json" },
     method: "POST",
@@ -418,6 +418,127 @@ test("validated Chat images and whole kept Conversations survive restart", async
   assert.deepEqual(
     [...new Uint8Array(restoredAttachment)],
     [...png],
+  );
+});
+
+test("a Text message sends multiple attachments to the model in selection order", async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), "fal-multiple-chat-attachments-"));
+  const chatCalls = [];
+  const app = await createWorkspaceServer({
+    adapters: {
+      async listOpenRouterModels() {
+        return {
+          data: [
+            {
+              id: "vendor/vision",
+              name: "Vision",
+              architecture: { input_modalities: ["text", "image"] },
+            },
+          ],
+        };
+      },
+      async *streamChat(input) {
+        chatCalls.push(input);
+        yield "Compared";
+      },
+    },
+    env: { FAL_KEY: "fake-key", OPENROUTER_API_KEY: "fake-key" },
+    root,
+  });
+  t.after(() => app.close());
+  const address = await app.listen();
+  await fetch(`${address}/api/models/text`);
+  const conversation = await fetch(`${address}/api/conversations`, {
+    body: JSON.stringify({ model: "vendor/vision" }),
+    headers: { "content-type": "application/json" },
+    method: "POST",
+  }).then((response) => response.json());
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0x00]);
+
+  await fetch(`${address}/api/conversations/${conversation.id}/messages`, {
+    body: JSON.stringify({
+      content: "Compare these",
+      attachments: [
+        { name: "first.png", type: "image/png", data: png.toString("base64") },
+        { name: "second.jpg", type: "image/jpeg", data: jpeg.toString("base64") },
+      ],
+    }),
+    headers: { "content-type": "application/json" },
+    method: "POST",
+  }).then((response) => response.text());
+
+  assert.deepEqual(chatCalls[0].messages[0].content, [
+    { type: "text", text: "Compare these" },
+    { type: "image_url", image_url: { url: `data:image/png;base64,${png.toString("base64")}` } },
+    { type: "image_url", image_url: { url: `data:image/jpeg;base64,${jpeg.toString("base64")}` } },
+  ]);
+});
+
+test("a Text message accepts a file without a local format restriction", async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), "fal-unrestricted-chat-attachment-"));
+  const chatCalls = [];
+  const app = await createWorkspaceServer({
+    adapters: {
+      async listOpenRouterModels() {
+        return {
+          data: [
+            {
+              id: "vendor/text",
+              name: "Text",
+              architecture: { input_modalities: ["text"] },
+            },
+          ],
+        };
+      },
+      async *streamChat(input) {
+        chatCalls.push(input);
+        yield "Summarized";
+      },
+    },
+    env: { FAL_KEY: "fake-key", OPENROUTER_API_KEY: "fake-key" },
+    root,
+  });
+  t.after(() => app.close());
+  const address = await app.listen();
+  await fetch(`${address}/api/models/text`);
+  const conversation = await fetch(`${address}/api/conversations`, {
+    body: JSON.stringify({ model: "vendor/text" }),
+    headers: { "content-type": "application/json" },
+    method: "POST",
+  }).then((response) => response.json());
+  const notes = Buffer.from("alpha\nbeta\n");
+
+  const response = await fetch(`${address}/api/conversations/${conversation.id}/messages`, {
+    body: JSON.stringify({
+      content: "Summarize this",
+      attachments: [
+        { name: "notes.txt", type: "text/plain", data: notes.toString("base64") },
+      ],
+    }),
+    headers: { "content-type": "application/json" },
+    method: "POST",
+  });
+  await response.text();
+
+  assert.deepEqual(
+    {
+      status: response.status,
+      content: chatCalls[0]?.messages[0].content,
+    },
+    {
+      status: 200,
+      content: [
+        { type: "text", text: "Summarize this" },
+        {
+          type: "file",
+          file: {
+            filename: "notes.txt",
+            file_data: `data:text/plain;base64,${notes.toString("base64")}`,
+          },
+        },
+      ],
+    },
   );
 });
 
