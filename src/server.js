@@ -705,7 +705,12 @@ export async function createWorkspaceServer(options = {}) {
     const context = [];
     for (const message of conversation.messages.filter((item) => !item.superseded)) {
       if (message.role !== "user" || !message.attachments?.length) {
-        context.push({ role: message.role, content: message.content });
+        context.push({
+          role: message.role,
+          content: message.content,
+          ...(message.role === "assistant" &&
+            message.reasoning && { reasoning: message.reasoning }),
+        });
         continue;
       }
       const content = [];
@@ -739,19 +744,31 @@ export async function createWorkspaceServer(options = {}) {
       "content-type": "application/x-ndjson; charset=utf-8",
     });
     let content = "";
+    let reasoning = "";
     try {
       for await (const chunk of adapters.streamChat({
         key: env.FAL_KEY,
         messages,
         model: conversation.model,
       })) {
-        content += chunk;
-        sendEvent(response, { type: "delta", content: chunk });
+        const event =
+          typeof chunk === "string"
+            ? { type: "content", content: chunk }
+            : chunk;
+        if (typeof event?.content !== "string" || !event.content) continue;
+        if (event.type === "reasoning") {
+          reasoning += event.content;
+          sendEvent(response, { type: "reasoning", content: event.content });
+        } else {
+          content += event.content;
+          sendEvent(response, { type: "delta", content: event.content });
+        }
       }
       conversation.messages.push({
         id: randomUUID(),
         role: "assistant",
         content,
+        ...(reasoning && { reasoning }),
         createdAt: now().toISOString(),
         ...(replaces && { replaces }),
       });

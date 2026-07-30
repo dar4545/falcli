@@ -1,0 +1,115 @@
+{
+  "capturedAt": "2026-07-29T02:42:14.606Z",
+  "request": {
+    "endpoint": "https://fal.run/openrouter/router/openai/v1/chat/completions",
+    "model": "deepseek/deepseek-v4-flash",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Think briefly, then answer with exactly two lines:\nSTREAM-LINE-1\nSTREAM-LINE-2"
+      }
+    ],
+    "stream": true,
+    "rounds": 1,
+    "regenerated": false
+  },
+  "response": {
+    "status": 200,
+    "statusText": "OK",
+    "headers": {
+      "content-type": "text/event-stream; charset=utf-8",
+      "date": "Wed, 29 Jul 2026 02:42:15 GMT",
+      "transfer-encoding": "chunked",
+      "x-fal-request-id": "019fabc0-51ae-7bb0-9c56-eba58bd320b2"
+    },
+    "completedAtMs": 3578,
+    "chunkTiming": [
+      { "atMs": 1534, "bytes": 25 },
+      { "atMs": 1943, "bytes": 25 },
+      { "atMs": 2361, "bytes": 25 },
+      { "atMs": 2558, "bytes": 282 },
+      { "atMs": 2591, "bytes": 299 },
+      { "atMs": 2649, "bytes": 288 },
+      { "atMs": 2669, "bytes": 283 },
+      { "atMs": 2713, "bytes": 285 },
+      { "atMs": 2753, "bytes": 290 },
+      { "atMs": 2791, "bytes": 285 },
+      { "atMs": 2845, "bytes": 288 },
+      { "atMs": 2990, "bytes": 286 },
+      { "atMs": 3134, "bytes": 285 },
+      { "atMs": 3263, "bytes": 291 },
+      { "atMs": 3440, "bytes": 290 },
+      { "atMs": 3482, "bytes": 285 },
+      { "atMs": 3506, "bytes": 284 },
+      { "atMs": 3563, "bytes": 303 },
+      { "atMs": 3571, "bytes": 285 },
+      { "atMs": 3571, "bytes": 458 },
+      { "atMs": 3571, "bytes": 14 }
+    ],
+    "rawSseFrames": [
+      ": OPENROUTER PROCESSING",
+      ": OPENROUTER PROCESSING",
+      ": OPENROUTER PROCESSING",
+      "data: {\"id\":\"gen-1785292935-2Qxfa2tFcug9Y6u3kWUq\",\"object\":\"chat.completion.chunk\",\"created\":1785292935,\"model\":\"deepseek/deepseek-v4-flash\",\"provider\":\"DeepInfra\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"W\",\"role\":\"assistant\"},\"finish_reason\":null,\"native_finish_reason\":null}]}",
+      "data: {\"id\":\"gen-1785292935-2Qxfa2tFcug9Y6u3kWUq\",\"object\":\"chat.completion.chunk\",\"created\":1785292935,\"model\":\"deepseek/deepseek-v4-flash\",\"provider\":\"DeepInfra\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"e assume you are a\",\"role\":\"assistant\"},\"finish_reason\":null,\"native_finish_reason\":null}]}",
+      "data: {\"id\":\"gen-1785292935-2Qxfa2tFcug9Y6u3kWUq\",\"object\":\"chat.completion.chunk\",\"created\":1785292935,\"model\":\"deepseek/deepseek-v4-flash\",\"provider\":\"DeepInfra\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\" stream\",\"role\":\"assistant\"},\"finish_reason\":null,\"native_finish_reason\":null}]}",
+      "data: {\"id\":\"gen-1785292935-2Qxfa2tFcug9Y6u3kWUq\",\"object\":\"chat.completion.chunk\",\"created\":1785292935,\"model\":\"deepseek/deepseek-v4-flash\",\"provider\":\"DeepInfra\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\" o\",\"role\":\"assistant\"},\"finish_reason\":null,\"native_finish_reason\":null}]}",
+      "data: {\"id\":\"gen-1785292935-2Qxfa2tFcug9Y6u3kWUq\",\"object\":\"chat.completion.chunk\",\"created\":1785292935,\"model\":\"deepseek/deepseek-v4-flash\",\"provider\":\"DeepInfra\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"f te\",\"role\":\"assistant\"},\"finish_reason\":null,\"native_finish_reason\":null}]}",
+      "data: {\"id\":\"gen-1785292935-2Qxfa2tFcug9Y6u3kWUq\",\"object\":\"chat.completion.chunk\",\"created\":1785292935,\"model\":\"deepseek/deepseek-v4-flash\",\"provider\":\"DeepInfra\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"xtual out\",\"role\":\"assistant\"},\"finish_reason\":null,\"native_finish_reason\":null}]}",
+      "data: {\"id\":\"gen-1785292935-2Qxfa2tFcug9Y6u3kWUq\",\"object\":\"chat.completion.chunk\",\"created\":1785292935,\"model\":\"deepseek/deepseek-v4-flash\",\"provider\":\"DeepInfra\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"put.\",\"role\":\"assistant\"},\"finish_reason\":null,\"native_finish_reason\":null}]}",
+      "data: {\"id\":\"gen-1785292935-2Qxfa2tFcug9Y6u3kWUq\",\"object\":\"chat.completion.chunk\",\"created\":1785292935,\"model\":\"deepseek/deepseek-v4-flash\",\"provider\":\"DeepInfra\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"\\nEach \",\"role\":\"assistant\"},\"finish_reason\":null,\"native_finish_reason\":null}]}",
+      "data: {\"id\":\"gen-1785292935-2Qxfa2tFcug9Y6u3kWUq\",\"object\":\"chat.completion.chunk\",\"created\":1785292935,\"model\":\"deepseek/deepseek-v4-flash\",\"provider\":\"DeepInfra\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"line \",\"role\":\"assistant\"},\"finish_reason\":null,\"native_finish_reason\":null}]}",
+      "data: {\"id\":\"gen-1785292935-2Qxfa2tFcug9Y6u3kWUq\",\"object\":\"chat.completion.chunk\",\"created\":1785292935,\"model\":\"deepseek/deepseek-v4-flash\",\"provider\":\"DeepInfra\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"you \",\"role\":\"assistant\"},\"finish_reason\":null,\"native_finish_reason\":null}]}",
+      "data: {\"id\":\"gen-1785292935-2Qxfa2tFcug9Y6u3kWUq\",\"object\":\"chat.completion.chunk\",\"created\":1785292935,\"model\":\"deepseek/deepseek-v4-flash\",\"provider\":\"DeepInfra\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"now write \",\"role\":\"assistant\"},\"finish_reason\":null,\"native_finish_reason\":null}]}",
+      "data: {\"id\":\"gen-1785292935-2Qxfa2tFcug9Y6u3kWUq\",\"object\":\"chat.completion.chunk\",\"created\":1785292935,\"model\":\"deepseek/deepseek-v4-flash\",\"provider\":\"DeepInfra\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"self-desc\",\"role\":\"assistant\"},\"finish_reason\":null,\"native_finish_reason\":null}]}",
+      "data: {\"id\":\"gen-1785292935-2Qxfa2tFcug9Y6u3kWUq\",\"object\":\"chat.completion.chunk\",\"created\":1785292935,\"model\":\"deepseek/deepseek-v4-flash\",\"provider\":\"DeepInfra\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ribe\",\"role\":\"assistant\"},\"finish_reason\":null,\"native_finish_reason\":null}]}",
+      "data: {\"id\":\"gen-1785292935-2Qxfa2tFcug9Y6u3kWUq\",\"object\":\"chat.completion.chunk\",\"created\":1785292935,\"model\":\"deepseek/deepseek-v4-flash\",\"provider\":\"DeepInfra\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"s t\",\"role\":\"assistant\"},\"finish_reason\":null,\"native_finish_reason\":null}]}",
+      "data: {\"id\":\"gen-1785292935-2Qxfa2tFcug9Y6u3kWUq\",\"object\":\"chat.completion.chunk\",\"created\":1785292935,\"model\":\"deepseek/deepseek-v4-flash\",\"provider\":\"DeepInfra\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"he line you put it on.\",\"role\":\"assistant\"},\"finish_reason\":null,\"native_finish_reason\":null}]}",
+      "data: {\"id\":\"gen-1785292935-2Qxfa2tFcug9Y6u3kWUq\",\"object\":\"chat.completion.chunk\",\"created\":1785292935,\"model\":\"deepseek/deepseek-v4-flash\",\"provider\":\"DeepInfra\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"\",\"role\":\"assistant\"},\"finish_reason\":\"stop\",\"native_finish_reason\":\"stop\"}]}",
+      "data: {\"id\":\"gen-1785292935-2Qxfa2tFcug9Y6u3kWUq\",\"object\":\"chat.completion.chunk\",\"created\":1785292935,\"model\":\"deepseek/deepseek-v4-flash\",\"provider\":\"DeepInfra\",\"service_tier\":null,\"choices\":[{\"index\":0,\"delta\":{\"content\":\"\",\"role\":\"assistant\"},\"finish_reason\":\"stop\",\"native_finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":27,\"completion_tokens\":26,\"total_tokens\":53,\"cost\":6.534e-6,\"prompt_tokens_details\":{\"cached_tokens\":8,\"cache_write_tokens\":0}}}",
+      "data: [DONE]"
+    ],
+    "parsed": {
+      "generationId": "gen-1785292935-2Qxfa2tFcug9Y6u3kWUq",
+      "provider": "DeepInfra",
+      "reasoningDeltas": [],
+      "contentDeltas": [
+        "W",
+        "e assume you are a",
+        " stream",
+        " o",
+        "f te",
+        "xtual out",
+        "put.",
+        "\nEach ",
+        "line ",
+        "you ",
+        "now write ",
+        "self-desc",
+        "ribe",
+        "s t",
+        "he line you put it on."
+      ],
+      "content": "We assume you are a stream of textual output.\nEach line you now write self-describes the line you put it on.",
+      "finishReason": "stop",
+      "usage": {
+        "prompt_tokens": 27,
+        "completion_tokens": 26,
+        "total_tokens": 53,
+        "cost": 0.000006534,
+        "prompt_tokens_details": {
+          "cached_tokens": 8,
+          "cache_write_tokens": 0
+        }
+      }
+    }
+  },
+  "observations": {
+    "incrementalContentConfirmed": true,
+    "firstContentAtMs": 2558,
+    "lastContentAtMs": 3563,
+    "reasoningReturned": false,
+    "requestedLiteralTwoLineAnswerFollowed": false,
+    "retryOrRegenerationPerformed": false
+  }
+}

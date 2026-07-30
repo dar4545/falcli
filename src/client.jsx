@@ -2,6 +2,13 @@ import "@picocss/pico/css/pico.min.css";
 import { render } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { allowsMultipleFileSelection } from "./media-file-selection.js";
+import {
+  compactText,
+  generationIssues,
+  mediaAlt,
+  modelMatchesSearch,
+  modelProvider,
+} from "./workspace-ui.js";
 import "./workspace.css";
 
 const tabs = ["text", "image", "video"];
@@ -81,6 +88,24 @@ function fileAsAttachment(file) {
 
 function ErrorNotice({ error }) {
   return error ? <p class="error" role="alert">{error}</p> : null;
+}
+
+function formatTimestamp(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? ""
+    : date.toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+}
+
+function PromptDisclosure({ prompt }) {
+  if (!prompt) return null;
+  return (
+    <details class="prompt-disclosure">
+      <summary>View prompt</summary>
+      <p>{prompt}</p>
+    </details>
+  );
 }
 
 function Account({ account, error, onRefresh, refreshing }) {
@@ -182,9 +207,21 @@ function ModelSelect({
   selectedId = undefined,
   type,
 }) {
+  const [search, setSearch] = useState("");
   const selected = selectedId ?? preferences.selections[type] ?? "";
   const model = models.find((item) => item.id === selected);
-  const favorite = type !== "text" && model?.favorite;
+  const [chooserOpen, setChooserOpen] = useState(!model);
+  const favorite =
+    type !== "text" && (preferences.favorites[type] || []).includes(selected);
+  const matches =
+    type === "text"
+      ? models.filter((item) => modelMatchesSearch(item, search))
+      : models;
+  const selectedOutsideSearch =
+    type === "text" && model && !matches.some((item) => item.id === selected);
+  const options = selectedOutsideSearch ? [model, ...matches] : matches;
+
+  useEffect(() => setChooserOpen(!model), [selected, model?.id]);
 
   async function choose(id) {
     if (onChoose) return onChoose(id);
@@ -204,28 +241,118 @@ function ModelSelect({
   }
 
   return (
-    <div class="model-row">
-      <label>
-        {type === "text" ? "Model via openrouter/router" : "FAL model"}
-        <select onChange={(event) => choose(event.currentTarget.value)} value={selected}>
-          <option value="">Choose a model…</option>
-          {models.map((item) => (
-            <option value={item.id}>{item.favorite ? "★ " : ""}{item.name} · {item.id}</option>
-          ))}
-        </select>
-      </label>
-      {type !== "text" && selected && (
-        <button
-          aria-label={favorite ? "Remove selected model from favourites" : "Add selected model to favourites"}
-          class="secondary outline favorite"
-          onClick={toggleFavorite}
-          title={favorite ? "Remove favourite" : "Add favourite"}
-          type="button"
-        >
-          {favorite ? "★" : "☆"}
-        </button>
-      )}
+    <div class={`model-picker ${type}-model-picker`}>
+      <details
+        class="model-chooser"
+        onToggle={(event) => setChooserOpen(event.currentTarget.open)}
+        open={chooserOpen}
+      >
+        <summary>{model ? `Change ${type} model` : `Choose ${type} model`}</summary>
+        {type === "text" && (
+          <label class="model-search">
+            Search Text models
+            <input
+              aria-controls="text-model-select"
+              onInput={(event) => setSearch(event.currentTarget.value)}
+              placeholder="Search name, provider, or model ID"
+              type="search"
+              value={search}
+            />
+          </label>
+        )}
+        <div class="model-row">
+          <label>
+            {type === "text" ? "Model via openrouter/router" : "FAL model"}
+            <select
+              aria-describedby={`${type}-model-summary`}
+              id={`${type}-model-select`}
+              onChange={(event) => choose(event.currentTarget.value)}
+              value={selected}
+            >
+              <option value="">Choose a model…</option>
+              {options.map((item) => (
+                <option value={item.id}>
+                  {item.favorite ? "★ " : ""}
+                  {item.name}
+                  {selectedOutsideSearch && item.id === selected
+                    ? " · current selection"
+                    : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        {type === "text" && search && !matches.length && (
+          <p class="no-results" role="status">
+            No Text models match “{search}”. Clear the search to browse all models.
+          </p>
+        )}
+      </details>
+      <div class="selected-model-row">
+        <div class="selected-model" id={`${type}-model-summary`}>
+          {model ? (
+            <>
+              <span><strong>Selected:</strong> {model.name}</span>
+              <small>{modelProvider(model)} · {model.id}</small>
+            </>
+          ) : (
+            <small>No model selected.</small>
+          )}
+        </div>
+        {type !== "text" && selected && (
+          <button
+            aria-label={favorite ? "Remove selected model from favorites" : "Add selected model to favorites"}
+            aria-pressed={favorite}
+            class="secondary outline compact favorite"
+            onClick={toggleFavorite}
+            title={favorite ? "Remove favorite" : "Add favorite"}
+            type="button"
+          >
+            <span aria-hidden="true">{favorite ? "★" : "☆"}</span>
+            {favorite ? "Favorited" : "Favorite"}
+          </button>
+        )}
+      </div>
     </div>
+  );
+}
+
+function MessageContent({ content, reasoning, streaming = false }) {
+  return (
+    <>
+      {reasoning && (
+        <details class="reasoning" open={streaming}>
+          <summary>Reasoning</summary>
+          <p class="message-text">{reasoning}</p>
+        </details>
+      )}
+      {content && <p class="message-text">{content}</p>}
+    </>
+  );
+}
+
+function ConversationHistoryButton({ current, item, onChoose }) {
+  const firstUser = item.messages.find((message) => message.role === "user");
+  const latest = item.messages.at(-1);
+  const title = compactText(firstUser?.content, 58) || "New Conversation";
+  const preview =
+    compactText(latest?.content, 72) ||
+    (latest?.attachments?.length ? `${latest.attachments.length} attachment(s)` : "No messages yet");
+  const timestamp = formatTimestamp(item.updatedAt || item.createdAt || latest?.createdAt);
+  return (
+    <button
+      aria-current={current ? "page" : undefined}
+      class={current ? "conversation-summary secondary" : "conversation-summary secondary outline"}
+      onClick={onChoose}
+      type="button"
+    >
+      <strong>{title}</strong>
+      <span>{preview}</span>
+      <small>
+        {item.kept ? "Kept" : latest ? `${item.messages.length} message(s)` : "Draft"}
+        {timestamp && ` · ${timestamp}`}
+      </small>
+    </button>
   );
 }
 
@@ -245,6 +372,7 @@ function ChatWorkspace({
   const [attachments, setAttachments] = useState([]);
   const [busy, setBusy] = useState(false);
   const [draft, setDraft] = useState("");
+  const [reasoningDraft, setReasoningDraft] = useState("");
   const [localError, setLocalError] = useState("");
   const fileRef = useRef(/** @type {HTMLInputElement | null} */ (null));
   const conversation = conversations.find((item) => item.id === currentId);
@@ -262,11 +390,16 @@ function ChatWorkspace({
 
   async function consume(response) {
     setDraft("");
+    setReasoningDraft("");
     await readEvents(response, (event) => {
       if (event.type === "delta") setDraft((value) => value + event.content);
+      if (event.type === "reasoning") {
+        setReasoningDraft((value) => value + event.content);
+      }
       if (event.type === "error") setLocalError(event.error);
     });
     setDraft("");
+    setReasoningDraft("");
     await refreshConversations();
   }
 
@@ -339,27 +472,93 @@ function ChatWorkspace({
       <aside class="conversation-list">
         <button onClick={newConversation} type="button">New chat</button>
         <nav aria-label="Conversation history">
+          {!conversations.length && <p class="empty compact-empty">No conversation history yet.</p>}
           {conversations.map((item) => (
-            <button
-              aria-current={item.id === currentId ? "page" : undefined}
-              class={item.id === currentId ? "secondary" : "secondary outline"}
-              onClick={() => setCurrentId(item.id)}
-              type="button"
-            >
-              {(item.messages.find((message) => message.role === "user")?.content || "New Conversation").slice(0, 38)}
-              {item.kept ? " · kept" : ""}
-            </button>
+            <ConversationHistoryButton
+              current={item.id === currentId}
+              item={item}
+              onChoose={() => setCurrentId(item.id)}
+            />
           ))}
         </nav>
       </aside>
-      <section>
+      <section class="chat-main">
         <ModelSelect models={models} preferences={preferences} savePreferences={savePreferences} type="text" />
+        <form class="chat-composer" onSubmit={send}>
+          <TemplateTools prompt={prompt} reload={reloadTemplates} setPrompt={setPrompt} templates={templates} type="text" />
+          <label>
+            Message
+            <textarea onInput={(event) => setPrompt(event.currentTarget.value)} rows={3} value={prompt} />
+          </label>
+          <details class="attachment-tools">
+            <summary>
+              Add attachments
+              {attachments.length ? ` · ${attachments.length} selected` : " · optional"}
+            </summary>
+            <label>
+              Attachments (any file type)
+              <input
+                multiple
+                onChange={(event) => setAttachments(Array.from(event.currentTarget.files ?? []))}
+                ref={fileRef}
+                type="file"
+              />
+            </label>
+          </details>
+          <div class="inline-controls">
+            <button
+              aria-describedby="chat-send-requirements"
+              disabled={busy || (!prompt.trim() && !attachments.length) || !preferences.selections.text}
+            >
+              {busy ? "Sending…" : "Send"}
+            </button>
+            <button
+              class="secondary outline"
+              disabled={busy || !conversation?.messages.some((message) => message.role === "assistant" && !message.superseded)}
+              onClick={regenerate}
+              title={!conversation ? "Choose a conversation with an Assistant response first" : undefined}
+              type="button"
+            >
+              Regenerate
+            </button>
+            <button
+              class="secondary outline"
+              disabled={!conversation || conversation.kept}
+              onClick={keep}
+              title={!conversation ? "Choose a conversation first" : conversation.kept ? "This conversation is already kept" : undefined}
+              type="button"
+            >
+              Keep Conversation
+            </button>
+            <button
+              class="contrast outline"
+              disabled={!conversation}
+              onClick={discard}
+              title={!conversation ? "Choose a conversation first" : undefined}
+              type="button"
+            >
+              Discard Conversation
+            </button>
+          </div>
+          <small class="control-hint" id="chat-send-requirements">
+            {!preferences.selections.text
+              ? "Choose a Text model to enable Send."
+              : !prompt.trim() && !attachments.length
+                ? "Enter a message or add an attachment to enable Send."
+                : "Ready to send."}
+          </small>
+        </form>
+        <ErrorNotice error={localError || error} />
         <div class="messages" aria-live="polite">
-          {!conversation && <p class="empty">Start a new Conversation or send a message.</p>}
+          {!conversation && (
+            <p class="empty">
+              Your conversation will appear here. Choose a Text model, then compose a message above.
+            </p>
+          )}
           {conversation?.messages.map((message) => (
             <article class={`message ${message.role} ${message.superseded ? "superseded" : ""}`}>
               <header>{message.role === "assistant" ? "Assistant" : "You"}{message.superseded ? " · replaced" : ""}</header>
-              <p>{message.content}</p>
+              <MessageContent content={message.content} reasoning={message.reasoning} />
               {message.attachments?.map((item) =>
                 item.type?.startsWith("image/") ? (
                   <img alt={item.name} loading="lazy" src={item.fileUrl} />
@@ -369,31 +568,13 @@ function ChatWorkspace({
               )}
             </article>
           ))}
-          {draft && <article class="message assistant"><header>Assistant · streaming</header><p>{draft}</p></article>}
+          {(reasoningDraft || draft) && (
+            <article class="message assistant">
+              <header>Assistant · streaming</header>
+              <MessageContent content={draft} reasoning={reasoningDraft} streaming />
+            </article>
+          )}
         </div>
-        <ErrorNotice error={localError || error} />
-        <form onSubmit={send}>
-          <TemplateTools prompt={prompt} reload={reloadTemplates} setPrompt={setPrompt} templates={templates} type="text" />
-          <label>
-            Message
-            <textarea onInput={(event) => setPrompt(event.currentTarget.value)} rows={4} value={prompt} />
-          </label>
-          <label>
-            Attachments (any file type)
-            <input
-              multiple
-              onChange={(event) => setAttachments(Array.from(event.currentTarget.files ?? []))}
-              ref={fileRef}
-              type="file"
-            />
-          </label>
-          <div class="inline-controls">
-            <button disabled={busy || (!prompt.trim() && !attachments.length) || !preferences.selections.text}>Send</button>
-            <button class="secondary outline" disabled={busy || !conversation?.messages.some((message) => message.role === "assistant" && !message.superseded)} onClick={regenerate} type="button">Regenerate</button>
-            <button class="secondary outline" disabled={!conversation || conversation.kept} onClick={keep} type="button">Keep Conversation</button>
-            <button class="contrast outline" disabled={!conversation} onClick={discard} type="button">Discard Conversation</button>
-          </div>
-        </form>
       </section>
     </div>
   );
@@ -424,7 +605,7 @@ function SourceItem({ index, onRemove = null, onReorder = null, source }) {
       }}
     >
       {source.fileUrl && source.type?.startsWith("image/") && (
-        <img alt="" src={source.fileUrl} />
+        <img alt={`Source preview: ${source.name}`} src={source.fileUrl} />
       )}
       <span>
         <strong>{source.name}</strong>
@@ -447,14 +628,32 @@ function SourceItem({ index, onRemove = null, onReorder = null, source }) {
   );
 }
 
-function FileFieldControl({ field, mode, onFiles, onRemove, onReorder, sources }) {
+function FileFieldControl({
+  field,
+  invalid,
+  mode,
+  onFiles,
+  onRemove,
+  onReorder,
+  sources,
+}) {
   const acceptsMultiple = allowsMultipleFileSelection(mode, field);
+  const requirementId = `${mode}-${field.name}-requirement`;
   return (
-    <fieldset class="file-field">
+    <fieldset
+      aria-describedby={invalid ? requirementId : undefined}
+      aria-invalid={invalid || undefined}
+      class={`file-field ${invalid ? "invalid-field" : ""}`}
+    >
       <legend>
         {field.label}{field.required ? " *" : ""}
       </legend>
       {field.description && <small>{field.description}</small>}
+      {invalid && (
+        <small class="field-error" id={requirementId}>
+          Required before generation: add {field.label}.
+        </small>
+      )}
       <label
         class="drop-zone"
         onDragOver={(event) => event.preventDefault()}
@@ -507,12 +706,23 @@ function ResultCard({ onEdit, result, selected, setSelected, type, updateResult 
           <span class={`status ${result.state}`}>{result.state}</span>
         </label>
       </header>
-      {result.fileUrl && type === "image" && <a href={result.fileUrl} target="_blank"><img alt={result.prompt} loading="lazy" src={result.fileUrl} /></a>}
-      {result.fileUrl && type === "video" && <video controls preload="metadata" src={result.fileUrl} />}
-      <p>
-        {result.failure?.status && `${result.failure.status} · `}
-        {result.error || result.prompt}
-      </p>
+      {result.fileUrl && type === "image" && (
+        <a href={result.fileUrl} target="_blank">
+          <img alt={mediaAlt(result, type)} loading="lazy" src={result.fileUrl} />
+        </a>
+      )}
+      {result.fileUrl && type === "video" && (
+        <video aria-label={mediaAlt(result, type)} controls preload="metadata" src={result.fileUrl} />
+      )}
+      <small class="result-meta">
+        {result.model}
+        {formatTimestamp(result.keptAt || result.createdAt) && ` · ${formatTimestamp(result.keptAt || result.createdAt)}`}
+      </small>
+      {result.error ? (
+        <p>{result.failure?.status && `${result.failure.status} · `}{result.error}</p>
+      ) : (
+        <PromptDisclosure prompt={result.prompt} />
+      )}
       {result.failure?.details !== undefined && (
         <details class="failure-detail">
           <summary>Failure details</summary>
@@ -552,6 +762,7 @@ const mediaModes = {
 };
 
 function MediaWorkspace({
+  account,
   batches,
   composer,
   error,
@@ -576,15 +787,24 @@ function MediaWorkspace({
   const selectedModelId =
     preferences.modeSelections?.[type]?.[mode] ?? preferences.selections[type] ?? "";
   const selectedModel = models.find((model) => model.id === selectedModelId);
+  const matchingModels = useMemo(
+    () =>
+      models.filter(
+        (model) =>
+          model.modes?.includes(mode) &&
+          (modelMatchesSearch(model, search) ||
+            String(model.description ?? "").toLowerCase().includes(search.trim().toLowerCase())),
+      ),
+    [mode, models, search],
+  );
   const visibleModels = useMemo(
     () =>
       models.filter(
         (model) =>
           model.modes?.includes(mode) &&
           (model.id === selectedModelId ||
-            `${model.name} ${model.id} ${model.description}`
-              .toLowerCase()
-              .includes(search.toLowerCase())),
+            modelMatchesSearch(model, search) ||
+            String(model.description ?? "").toLowerCase().includes(search.trim().toLowerCase())),
       ),
     [mode, models, search, selectedModelId],
   );
@@ -595,6 +815,17 @@ function MediaWorkspace({
   const selectedResults = batches
     .flatMap((batch) => batch.results)
     .filter((result) => selected.has(result.id));
+  const missingRequirements = generationIssues({
+    composer,
+    selectedModel,
+    selectedModelId,
+    visibleFileFields,
+  });
+  const promptMissing =
+    Boolean(selectedModel?.prompt?.required) && !composer.prompt.trim();
+  const accountBalance = Number.isFinite(account?.remainingCredits)
+    ? `${account.remainingCredits.toFixed(2)} credits`
+    : "unavailable";
 
   function setSelected(id, checked) {
     setSelectedState((current) => {
@@ -778,6 +1009,12 @@ function MediaWorkspace({
   async function generate(event) {
     event.preventDefault();
     setLocalError("");
+    if (busy || missingRequirements.length) {
+      if (missingRequirements.length) {
+        setLocalError(`Cannot generate yet: ${missingRequirements.join("; ")}.`);
+      }
+      return;
+    }
     setBusy(true);
     try {
       const readySourceFields = {};
@@ -888,14 +1125,6 @@ function MediaWorkspace({
             {mediaModes[type].map(([value, label]) => <option value={value}>{label}</option>)}
           </select>
         </label>
-        <label>
-          Search models
-          <input onInput={(event) => setSearch(event.currentTarget.value)} placeholder={`Search ${type} models`} type="search" value={search} />
-        </label>
-        <button class="secondary outline" onClick={refreshModels} type="button">
-          {modelWarning ? "Retry model schemas" : "Refresh models"}
-        </button>
-        {modelWarning && <p class="model-warning" role="status">{modelWarning}</p>}
         <ModelSelect
           models={visibleModels}
           onChoose={chooseModel}
@@ -908,32 +1137,32 @@ function MediaWorkspace({
           type={type}
         />
         {selectedModel?.prompt && (
-          <>
-            <TemplateTools
-              prompt={composer.prompt}
-              reload={reloadTemplates}
-              setPrompt={(prompt) => setComposer((current) => ({ ...current, prompt }))}
-              templates={templates}
-              type={type}
+          <label>
+            {selectedModel.prompt.label}{selectedModel.prompt.required ? " *" : ""}
+            {selectedModel.prompt.description && <small>{selectedModel.prompt.description}</small>}
+            {promptMissing && (
+              <small class="field-error" id={`${type}-prompt-requirement`}>
+                Required before generation: enter {selectedModel.prompt.label || "a prompt"}.
+              </small>
+            )}
+            <textarea
+              aria-describedby={promptMissing ? `${type}-prompt-requirement` : undefined}
+              aria-invalid={promptMissing || undefined}
+              onInput={(event) =>
+                setComposer((current) => ({
+                  ...current,
+                  prompt: event.currentTarget.value,
+                }))}
+              required={selectedModel.prompt.required}
+              rows={3}
+              value={composer.prompt}
             />
-            <label>
-              {selectedModel.prompt.label}{selectedModel.prompt.required ? " *" : ""}
-              {selectedModel.prompt.description && <small>{selectedModel.prompt.description}</small>}
-              <textarea
-                onInput={(event) =>
-                  setComposer((current) => ({
-                    ...current,
-                    prompt: event.currentTarget.value,
-                  }))}
-                rows={6}
-                value={composer.prompt}
-              />
-            </label>
-          </>
+          </label>
         )}
         {visibleFileFields.map((field) => (
           <FileFieldControl
             field={field}
+            invalid={field.required && !(composer.sourceFields[field.name] ?? []).length}
             mode={mode}
             onFiles={(files) => addFiles(field, files)}
             onRemove={removeSource}
@@ -963,40 +1192,117 @@ function MediaWorkspace({
             ))}
           </fieldset>
         )}
-        <label>
-          Results per Batch
-          <input
-            max="50"
-            min="1"
-            onInput={(event) =>
-              setComposer((current) => ({
-                ...current,
-                quantity: Number(event.currentTarget.value),
-              }))}
-            type="number"
-            value={composer.quantity}
+        <section class="generation-action" aria-label="Generation preflight">
+          <label class="quantity-field">
+            Results per Batch
+            <input
+              aria-invalid={
+                !Number.isInteger(composer.quantity) ||
+                composer.quantity < 1 ||
+                composer.quantity > 50 ||
+                undefined
+              }
+              max="50"
+              min="1"
+              onInput={(event) =>
+                setComposer((current) => ({
+                  ...current,
+                  quantity: Number(event.currentTarget.value),
+                }))}
+              required
+              type="number"
+              value={composer.quantity}
+            />
+          </label>
+          <p class="credit-notice" id={`${type}-generation-cost`}>
+            Generation may consume provider credits. Exact price is unavailable in this workspace.
+            {" "}Current account balance: {accountBalance}.
+          </p>
+          <p
+            class={missingRequirements.length ? "requirements missing" : "requirements ready"}
+            id={`${type}-generation-requirements`}
+            role="status"
+          >
+            {missingRequirements.length
+              ? <>Complete before generating: {missingRequirements.join("; ")}.</>
+              : "Required fields are complete. Generation is ready."}
+          </p>
+          <button
+            aria-describedby={`${type}-generation-cost ${type}-generation-requirements`}
+            disabled={busy || missingRequirements.length > 0}
+          >
+            {busy ? "Preparing Batch…" : "Generate Batch"}
+          </button>
+        </section>
+        {selectedModel?.prompt && (
+          <TemplateTools
+            prompt={composer.prompt}
+            reload={reloadTemplates}
+            setPrompt={(prompt) => setComposer((current) => ({ ...current, prompt }))}
+            templates={templates}
+            type={type}
           />
-        </label>
-        <button disabled={busy || !selectedModelId}>
-          {busy ? "Preparing Batch…" : "Generate Batch"}
-        </button>
+        )}
+        <div class="model-search-row">
+          <label>
+            Search models
+            <input onInput={(event) => setSearch(event.currentTarget.value)} placeholder={`Search ${type} models`} type="search" value={search} />
+          </label>
+          <button class="secondary outline compact" onClick={refreshModels} type="button">
+            {modelWarning ? "Retry model schemas" : "Refresh models"}
+          </button>
+        </div>
+        {search && !matchingModels.length && (
+          <p class="no-results" role="status">
+            No {type} models match “{search}” in this generation mode.
+          </p>
+        )}
+        {modelWarning && <p class="model-warning" role="status">{modelWarning}</p>}
         <ErrorNotice error={localError || error} />
       </form>
-      <section>
+      <section class="batch-preview">
         <div class="review-bar">
           <strong>Batch preview</strong>
           <div class="inline-controls">
-            <button disabled={!selected.size || selectedResults.some((result) => result.state !== "completed")} onClick={() => review("keep")} type="button">Keep selected</button>
-            <button class="contrast outline" disabled={!selected.size} onClick={() => review("discard")} type="button">Discard selected</button>
+            <button
+              aria-describedby={`${type}-review-requirements`}
+              disabled={!selected.size || selectedResults.some((result) => result.state !== "completed")}
+              onClick={() => review("keep")}
+              type="button"
+            >
+              Keep selected
+            </button>
+            <button
+              aria-describedby={`${type}-review-requirements`}
+              class="contrast outline"
+              disabled={!selected.size}
+              onClick={() => review("discard")}
+              type="button"
+            >
+              Discard selected
+            </button>
           </div>
         </div>
-        {!batches.length && <p class="empty">Generated results will appear here as they complete.</p>}
-        {batches.map((batch) => (
-          <details open>
+        <small class="review-hint" id={`${type}-review-requirements`}>
+          {!selected.size
+            ? "Select a finished result to enable review actions. Only completed results can be kept."
+            : selectedResults.some((result) => result.state !== "completed")
+              ? "Discard is available; Keep requires every selected result to be completed."
+              : `${selected.size} completed result(s) selected.`}
+        </small>
+        {!batches.length && (
+          <p class="empty">
+            Generated {type} results and progress will appear here. Choose a model and complete
+            the required fields in the composer to enable Generate Batch.
+          </p>
+        )}
+        {batches.map((batch, index) => (
+          <details open={index === 0}>
             <summary>
               {batch.model} · {mediaModes[type].find(([value]) => value === batch.mode)?.[1] ?? batch.mode} · {batch.results.length} results
+              {formatTimestamp(batch.createdAt) && ` · ${formatTimestamp(batch.createdAt)}`}
             </summary>
-            {batch.prompt && <p>{batch.prompt}</p>}
+            <PromptDisclosure prompt={batch.prompt} />
             {Object.entries(batch.sourceFields ?? {}).map(([name, assigned]) => (
               <div class="batch-sources">
                 <strong>{name}</strong>
@@ -1035,9 +1341,17 @@ function Library({ results, type }) {
       <div class="library-grid">
         {kept.map((result) => (
           <article>
-            {type === "image" ? <img alt={result.prompt} loading="lazy" src={result.fileUrl} /> : <video controls preload="metadata" src={result.fileUrl} />}
-            <small>{result.model}</small>
-            <p>{result.prompt}</p>
+            {type === "image" ? (
+              <img alt={mediaAlt(result, type)} loading="lazy" src={result.fileUrl} />
+            ) : (
+              <video aria-label={mediaAlt(result, type)} controls preload="metadata" src={result.fileUrl} />
+            )}
+            <small class="result-meta">
+              <span class={`status ${result.state}`}>{result.state}</span>
+              {" "}{result.model}
+              {formatTimestamp(result.keptAt || result.createdAt) && ` · ${formatTimestamp(result.keptAt || result.createdAt)}`}
+            </small>
+            <PromptDisclosure prompt={result.prompt} />
           </article>
         ))}
       </div>
@@ -1224,6 +1538,7 @@ function Workspace() {
         ) : (
           <>
             <MediaWorkspace
+              account={account}
               batches={batches[active]}
               composer={mediaComposers[active]}
               error={modelErrors[active]}

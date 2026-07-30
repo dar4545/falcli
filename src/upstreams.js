@@ -79,8 +79,21 @@ export const defaultAdapters = {
         if (!line.startsWith("data:")) continue;
         const data = line.slice(5).trim();
         if (!data || data === "[DONE]") continue;
-        const content = JSON.parse(data).choices?.[0]?.delta?.content;
-        if (content) yield content;
+        const delta = JSON.parse(data).choices?.[0]?.delta;
+        const reasoning = delta?.reasoning ?? delta?.reasoning_content;
+        if (typeof reasoning === "string" && reasoning) {
+          yield { type: "reasoning", content: reasoning };
+        } else {
+          for (const detail of delta?.reasoning_details ?? []) {
+            const content = detail?.text ?? detail?.summary;
+            if (typeof content === "string" && content) {
+              yield { type: "reasoning", content };
+            }
+          }
+        }
+        if (typeof delta?.content === "string" && delta.content) {
+          yield { type: "content", content: delta.content };
+        }
       }
       if (done) break;
     }
