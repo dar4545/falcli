@@ -1,6 +1,7 @@
 import "@picocss/pico/css/pico.min.css";
 import { render } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
+import { allowsMultipleFileSelection } from "./media-file-selection.js";
 import "./workspace.css";
 
 const tabs = ["text", "image", "video"];
@@ -446,7 +447,8 @@ function SourceItem({ index, onRemove = null, onReorder = null, source }) {
   );
 }
 
-function FileFieldControl({ field, onFiles, onRemove, onReorder, sources }) {
+function FileFieldControl({ field, mode, onFiles, onRemove, onReorder, sources }) {
+  const acceptsMultiple = allowsMultipleFileSelection(mode, field);
   return (
     <fieldset class="file-field">
       <legend>
@@ -461,10 +463,10 @@ function FileFieldControl({ field, onFiles, onRemove, onReorder, sources }) {
           onFiles([...event.dataTransfer.files]);
         }}
       >
-        Drop {field.cardinality === "array" ? "files" : "a file"} here or browse
+        Drop {acceptsMultiple ? "files" : "a file"} here or browse
         <input
           aria-label={`Choose ${field.label}`}
-          multiple={field.cardinality === "array"}
+          multiple={acceptsMultiple}
           onChange={(event) => {
             onFiles([...(event.currentTarget.files ?? [])]);
             event.currentTarget.value = "";
@@ -932,6 +934,7 @@ function MediaWorkspace({
         {visibleFileFields.map((field) => (
           <FileFieldControl
             field={field}
+            mode={mode}
             onFiles={(files) => addFiles(field, files)}
             onRemove={removeSource}
             onReorder={(from, to) => reorder(field, from, to)}
