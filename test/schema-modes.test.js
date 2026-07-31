@@ -57,7 +57,7 @@ async function start(t, adapters) {
   return app.listen();
 }
 
-test("media catalog stays cached for the server session until manually refreshed", async (t) => {
+test("one media catalog fetch is shared by every tab and cached until restart", async (t) => {
   let version = 0;
   const address = await start(t, {
     async listFalModels() {
@@ -66,18 +66,23 @@ test("media catalog stays cached for the server session until manually refreshed
     },
   });
 
-  const first = await fetch(`${address}/api/models/image`).then((response) => response.json());
+  const [first, video] = await Promise.all([
+    fetch(`${address}/api/models/image`).then((response) => response.json()),
+    fetch(`${address}/api/models/video`).then((response) => response.json()),
+  ]);
   const cached = await fetch(`${address}/api/models/image`).then((response) => response.json());
   const refreshed = await fetch(`${address}/api/models/image?refresh=1`).then((response) =>
     response.json(),
   );
 
   assert.equal(first.models[0].name, "Version 1");
+  assert.equal(video.models[0].name, "Version 1");
   assert.equal(cached.models[0].name, "Version 1");
-  assert.equal(refreshed.models[0].name, "Version 2");
+  assert.equal(refreshed.models[0].name, "Version 1");
+  assert.equal(version, 1);
 });
 
-test("image catalog exposes schema controls and compatible modes while omitting unsupported models", async (t) => {
+test("image catalog exposes schema controls and compatible modes", async (t) => {
   const address = await start(t, {
     async listFalModels() {
       return {
@@ -167,8 +172,76 @@ test("image catalog exposes schema controls and compatible modes while omitting 
           },
         ],
       },
+      {
+        id: "fal-ai/unsupported",
+        modes: ["text-to-image"],
+        prompt: {
+          description: "",
+          label: "Prompt",
+          name: "prompt",
+          required: false,
+        },
+        fileFields: [],
+      },
     ],
   );
+  assert.deepEqual(
+    catalog.models.find((model) => model.id === "fal-ai/unsupported").parameterFields,
+    [
+      {
+        name: "seed",
+        label: "Seed",
+        description: "",
+        required: true,
+        type: "integer",
+        control: "number",
+      },
+    ],
+  );
+});
+
+test("enum options determine the normalized select value type for mixed schemas", async (t) => {
+  const address = await start(t, {
+    async listFalModels() {
+      return {
+        models: [
+          schemaModel("openai/gpt-image-2/edit", "GPT Image 2 Edit", {
+            image_size: {
+              anyOf: [
+                {
+                  type: "object",
+                  properties: {
+                    width: { type: "integer" },
+                    height: { type: "integer" },
+                  },
+                },
+                {
+                  type: "string",
+                  enum: ["square_hd", "square", "portrait_4_3", "auto"],
+                },
+              ],
+              default: "auto",
+            },
+          }),
+        ],
+      };
+    },
+  });
+
+  const catalog = await fetch(`${address}/api/models/image`).then((response) => response.json());
+
+  assert.deepEqual(catalog.models[0].parameterFields, [
+    {
+      name: "image_size",
+      label: "Image size",
+      description: "",
+      required: false,
+      type: "string",
+      control: "select",
+      options: ["square_hd", "square", "portrait_4_3", "auto"],
+      default: "auto",
+    },
+  ]);
 });
 
 test("video catalog places multipurpose models in every compatible generation mode", async (t) => {
@@ -229,7 +302,181 @@ test("video catalog places multipurpose models in every compatible generation mo
   );
 });
 
-test("schema failure falls back to prompt-only models and refresh retries attachment discovery", async (t) => {
+test("video catalog exposes schema-derived controls for essential generation parameters", async (t) => {
+  const address = await start(t, {
+    async listFalModels() {
+      return {
+        models: [
+          schemaModel(
+            "fal-ai/configurable-video",
+            "Configurable video",
+            {
+              prompt: { type: "string" },
+              resolution: {
+                type: "string",
+                enum: ["720p", "1080p"],
+                default: "1080p",
+              },
+              duration: {
+                type: "integer",
+                minimum: 1,
+                maximum: 30,
+                default: 5,
+              },
+              include_audio: {
+                type: "boolean",
+                default: true,
+              },
+              aspect_ratio: {
+                type: "string",
+                enum: ["16:9", "9:16", "1:1"],
+              },
+              bitrate: {
+                type: "number",
+                minimum: 0.5,
+                maximum: 50,
+                multipleOf: 0.5,
+              },
+            },
+            ["prompt", "duration", "aspect_ratio"],
+          ),
+        ],
+      };
+    },
+  });
+
+  const catalog = await fetch(`${address}/api/models/video`).then((response) => response.json());
+
+  assert.deepEqual(catalog.models[0].parameterFields, [
+    {
+      name: "resolution",
+      label: "Resolution",
+      description: "",
+      required: false,
+      type: "string",
+      control: "select",
+      options: ["720p", "1080p"],
+      default: "1080p",
+    },
+    {
+      name: "duration",
+      label: "Duration",
+      description: "",
+      required: true,
+      type: "integer",
+      control: "number",
+      default: 5,
+      minimum: 1,
+      maximum: 30,
+    },
+    {
+      name: "include_audio",
+      label: "Include audio",
+      description: "",
+      required: false,
+      type: "boolean",
+      control: "boolean",
+      default: true,
+    },
+    {
+      name: "aspect_ratio",
+      label: "Aspect ratio",
+      description: "",
+      required: true,
+      type: "string",
+      control: "select",
+      options: ["16:9", "9:16", "1:1"],
+    },
+    {
+      name: "bitrate",
+      label: "Bitrate",
+      description: "",
+      required: false,
+      type: "number",
+      control: "number",
+      minimum: 0.5,
+      maximum: 50,
+      step: 0.5,
+    },
+  ]);
+});
+
+test("media models are alphabetized by display name regardless of favorite status", async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), "fal-schema-sort-"));
+  const app = await createWorkspaceServer({
+    adapters: {
+      async listFalModels() {
+        return {
+          models: [
+            schemaModel("fal-ai/zulu", "Zulu 10", { prompt: { type: "string" } }),
+            schemaModel("fal-ai/alpha", "alpha", { prompt: { type: "string" } }),
+            schemaModel("fal-ai/zulu-two", "Zulu 2", { prompt: { type: "string" } }),
+          ],
+        };
+      },
+    },
+    env: { FAL_KEY: "fake-key", OPENROUTER_API_KEY: "" },
+    root,
+  });
+  t.after(() => app.close());
+  const address = await app.listen();
+  await fetch(`${address}/api/preferences`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      favorites: { image: ["fal-ai/zulu"], video: [] },
+      selections: { text: "", image: "", video: "" },
+      modes: { image: "text-to-image", video: "text-to-video" },
+      concurrency: 2,
+    }),
+  });
+
+  const catalog = await fetch(`${address}/api/models/image`).then((response) => response.json());
+
+  assert.deepEqual(catalog.models.map((model) => model.name), ["alpha", "Zulu 2", "Zulu 10"]);
+  assert.equal(catalog.models.find((model) => model.id === "fal-ai/zulu").favorite, true);
+});
+
+test("models with required structured parameters remain available", async (t) => {
+  const address = await start(t, {
+    async listFalModels() {
+      return {
+        models: [
+          schemaModel(
+            "fal-ai/structured",
+            "Structured",
+            {
+              prompt: { type: "string" },
+              camera_path: {
+                type: "array",
+                items: { type: "object" },
+                minItems: 1,
+              },
+            },
+            ["camera_path"],
+          ),
+        ],
+      };
+    },
+  });
+
+  const catalog = await fetch(`${address}/api/models/video`).then((response) => response.json());
+
+  assert.equal(catalog.models[0].id, "fal-ai/structured");
+  assert.deepEqual(catalog.models[0].parameterFields, [
+    {
+      name: "camera_path",
+      label: "Camera path",
+      description: "",
+      required: true,
+      type: "array",
+      control: "json",
+      minItems: 1,
+    },
+  ]);
+});
+
+test("schema failure fallback is cached for the session", async (t) => {
   let schemaFails = true;
   const address = await start(t, {
     async listFalModels({ expand }) {
@@ -264,14 +511,16 @@ test("schema failure falls back to prompt-only models and refresh retries attach
   const fallback = await fallbackResponse.json();
   assert.equal(fallbackResponse.status, 200);
   assert.match(fallback.warning, /schema service unavailable/);
-  assert.equal(fallback.retry, "/api/models/image?refresh=1");
+  assert.equal(fallback.retry, undefined);
   assert.deepEqual(fallback.models[0].modes, ["text-to-image"]);
   assert.equal(fallback.models[0].schemaStatus, "unavailable");
 
   schemaFails = false;
-  const retried = await fetch(`${address}${fallback.retry}`).then((response) => response.json());
-  assert.deepEqual(retried.models[0].modes, ["image-to-image"]);
-  assert.equal(retried.models[0].schemaStatus, "ready");
+  const cached = await fetch(`${address}/api/models/image?refresh=1`).then((response) =>
+    response.json(),
+  );
+  assert.deepEqual(cached.models[0].modes, ["text-to-image"]);
+  assert.equal(cached.models[0].schemaStatus, "unavailable");
 });
 
 test("favorites stay tab-wide while mode and model selections survive restart per mode", async (t) => {

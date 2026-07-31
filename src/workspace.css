@@ -334,19 +334,77 @@ body {
   min-height: 4.5rem;
 }
 
-.model-search-row {
-  align-items: end;
+.parameter-fields {
+  border: 1px solid var(--pico-muted-border-color);
+  border-radius: var(--pico-border-radius);
+  margin-bottom: .75rem;
+  padding: .55rem .65rem;
+}
+
+.parameter-fields > summary {
+  align-items: center;
   display: flex;
-  gap: .75rem;
+  justify-content: space-between;
+  min-height: 2rem;
 }
 
-.model-search-row label {
-  flex: 1;
+.parameter-fields > summary small {
+  color: var(--pico-muted-color);
+  font-weight: normal;
+  margin-right: .5rem;
 }
 
-.model-search-row button {
-  margin-bottom: var(--pico-spacing);
-  min-height: 44px;
+.parameter-fields[open] > summary {
+  border-bottom: 1px solid var(--pico-muted-border-color);
+  margin-bottom: .65rem;
+  padding-bottom: .5rem;
+}
+
+.parameter-grid {
+  display: grid;
+  gap: .65rem .85rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.parameter-field {
+  margin-bottom: 0;
+}
+
+.parameter-label {
+  align-items: center;
+  display: flex;
+  font-size: .88rem;
+  font-weight: 600;
+  gap: .35rem;
+  justify-content: space-between;
+  margin-bottom: .25rem;
+}
+
+.parameter-help {
+  align-items: center;
+  border: 1px solid var(--pico-muted-border-color);
+  border-radius: 50%;
+  color: var(--pico-muted-color);
+  cursor: help;
+  display: inline-flex;
+  flex: 0 0 1.1rem;
+  font-size: .7rem;
+  font-weight: 700;
+  height: 1.1rem;
+  justify-content: center;
+  line-height: 1;
+  width: 1.1rem;
+}
+
+.parameter-field :is(input, select, textarea) {
+  font-size: .9rem;
+  margin-bottom: 0;
+  min-height: 2.55rem;
+  padding-block: .4rem;
+}
+
+.parameter-field textarea {
+  min-height: 4.5rem;
 }
 
 .generation-action {
@@ -592,6 +650,14 @@ body {
   padding-left: .75rem;
 }
 
+.model-loading {
+  border-left: .25rem solid var(--pico-primary);
+  color: var(--pico-muted-color);
+  font-size: .9rem;
+  margin-bottom: .75rem;
+  padding-left: .75rem;
+}
+
 .failure-detail {
   margin-bottom: var(--pico-spacing);
 }
@@ -683,17 +749,6 @@ textarea:disabled {
     width: 100%;
   }
 
-  .model-search-row {
-    align-items: stretch;
-    flex-direction: column;
-    gap: 0;
-  }
-
-  .model-search-row button {
-    margin-bottom: .75rem;
-    width: 100%;
-  }
-
   .model-row .favorite {
     align-self: flex-start;
     margin-bottom: .75rem;
@@ -710,6 +765,10 @@ textarea:disabled {
   }
 
   .generation-action {
+    grid-template-columns: 1fr;
+  }
+
+  .parameter-grid {
     grid-template-columns: 1fr;
   }
 

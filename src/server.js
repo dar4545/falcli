@@ -146,6 +146,32 @@ function inputSchema(model) {
   );
 }
 
+function schemaDocument(model) {
+  return model.openapi ?? model.openapi_schema ?? model["openapi-3.0"] ?? {};
+}
+
+function concreteSchema(document, schema) {
+  const resolved = resolveSchema(document, schema) ?? {};
+  if (Array.isArray(resolved.allOf)) {
+    return resolved.allOf.reduce(
+      (merged, part) => ({ ...merged, ...concreteSchema(document, part) }),
+      { ...resolved, allOf: undefined },
+    );
+  }
+  const variants = resolved.anyOf ?? resolved.oneOf;
+  if (!Array.isArray(variants)) return resolved;
+  const concrete = variants
+    .map((variant) => resolveSchema(document, variant))
+    .filter((variant) => variant && variant.type !== "null");
+  if (!concrete.length) return resolved;
+  const merged = { ...resolved, ...concrete[0] };
+  const options = concrete.flatMap((variant) => variant.enum ?? []);
+  if (options.length) merged.enum = [...new Set(options)];
+  delete merged.anyOf;
+  delete merged.oneOf;
+  return merged;
+}
+
 function fileField(name, schema, required) {
   const stringField =
     schema?.type === "string" ||
@@ -174,6 +200,60 @@ function fileField(name, schema, required) {
   };
 }
 
+function parameterField(name, unresolvedSchema, required, document) {
+  const schema = concreteSchema(document, unresolvedSchema);
+  const options = Array.isArray(schema.enum)
+    ? schema.enum
+    : Object.hasOwn(schema, "const")
+      ? [schema.const]
+      : undefined;
+  const optionType =
+    options?.length &&
+    options.every(
+      (option) =>
+        option !== null &&
+        ["string", "number", "boolean"].includes(typeof option) &&
+        typeof option === typeof options[0],
+    )
+      ? typeof options[0]
+      : undefined;
+  const inferredType =
+    optionType ??
+    schema?.type ??
+    (schema?.properties
+      ? "object"
+      : schema?.items
+        ? "array"
+        : "json");
+  return {
+    name,
+    label: labelFor(name, schema),
+    description: schema.description ?? "",
+    required,
+    type: inferredType,
+    control: options
+      ? "select"
+      : inferredType === "boolean"
+        ? "boolean"
+        : inferredType === "string"
+          ? "text"
+          : ["integer", "number"].includes(inferredType)
+            ? "number"
+            : "json",
+    ...(options && { options }),
+    ...(Object.hasOwn(schema, "default") && { default: schema.default }),
+    ...(Object.hasOwn(schema, "const") && { default: schema.const }),
+    ...(Number.isFinite(schema.minimum) && { minimum: schema.minimum }),
+    ...(Number.isFinite(schema.maximum) && { maximum: schema.maximum }),
+    ...(Number.isFinite(schema.multipleOf) && { step: schema.multipleOf }),
+    ...(Number.isFinite(schema.minLength) && { minLength: schema.minLength }),
+    ...(Number.isFinite(schema.maxLength) && { maxLength: schema.maxLength }),
+    ...(typeof schema.pattern === "string" && { pattern: schema.pattern }),
+    ...(Number.isFinite(schema.minItems) && { minItems: schema.minItems }),
+    ...(Number.isFinite(schema.maxItems) && { maxItems: schema.maxItems }),
+  };
+}
+
 function modesFor(type, fields) {
   const requiredFiles = fields.some((field) => field.required);
   if (type === "image") {
@@ -196,6 +276,7 @@ function normalizeFal(payload, favorites, type) {
   return (payload.models ?? payload.data ?? []).flatMap((model) => {
     const metadata = model.metadata ?? {};
     const id = model.endpoint_id ?? model.id ?? model.model_id;
+    const document = schemaDocument(model);
     const schema = inputSchema(model);
     if (!schema) {
       return [{
@@ -212,20 +293,24 @@ function normalizeFal(payload, favorites, type) {
           required: false,
         },
         fileFields: [],
+        parameterFields: [],
         schemaStatus: "unavailable",
-        warning: "Model schema is unavailable. Attachment modes require a retry.",
+        warning: "Model schema is unavailable. Restart the app to reload attachment schemas.",
       }];
     }
     const required = new Set(schema.required ?? []);
     const properties = schema.properties ?? {};
     const fields = Object.entries(properties).flatMap(([name, property]) => {
-      const field = fileField(name, property, required.has(name));
+      const field = fileField(name, concreteSchema(document, property), required.has(name));
       return field ? [field] : [];
     });
-    const supported = new Set(["prompt", ...fields.map((field) => field.name)]);
-    if ([...required].some((name) => !supported.has(name))) return [];
-    const promptSchema = properties.prompt;
-    if (required.has("prompt") && promptSchema?.type !== "string") return [];
+    const fileNames = new Set(fields.map((field) => field.name));
+    const parameterFields = Object.entries(properties).flatMap(([name, property]) => {
+      if (name === "prompt" || fileNames.has(name)) return [];
+      const field = parameterField(name, property, required.has(name), document);
+      return field ? [field] : [];
+    });
+    const promptSchema = concreteSchema(document, properties.prompt);
     return [{
       id,
       name: metadata.display_name ?? model.name ?? id,
@@ -243,6 +328,7 @@ function normalizeFal(payload, favorites, type) {
             }
           : null,
       fileFields: fields,
+      parameterFields,
       schemaStatus: "ready",
     }];
   });
@@ -496,7 +582,7 @@ export async function createWorkspaceServer(options = {}) {
   const results = new Map((await loadKeptResults(libraryDir)).map((result) => [result.id, result]));
   const mediaSources = new Map();
   const textCapabilities = new Map();
-  const falCatalogs = new Map();
+  let falCatalogPromise;
   const batches = new Map();
   const eventClients = new Set();
   const initialPreferences = normalizePreferences(
@@ -711,7 +797,7 @@ export async function createWorkspaceServer(options = {}) {
       if (current && Date.parse(current.expiresAt) > currentTime) continue;
       batch.uploads.set(hash, await uploadMediaSource(source));
     }
-    const input = {};
+    const input = { ...(batch.parameters ?? {}) };
     if (batch.promptProvided) input.prompt = batch.prompt;
     for (const [field, assigned] of Object.entries(batch.sourceAssignments)) {
       const ids = Array.isArray(assigned) ? assigned : [assigned];
@@ -989,6 +1075,16 @@ export async function createWorkspaceServer(options = {}) {
         const model = String(input.model ?? "").trim();
         const promptProvided = Object.hasOwn(input, "prompt");
         const prompt = String(input.prompt ?? "");
+        const parameters =
+          input.parameters && typeof input.parameters === "object" && !Array.isArray(input.parameters)
+            ? Object.fromEntries(
+                Object.entries(input.parameters).filter(
+                  ([name, value]) =>
+                    !["prompt", "__proto__", "constructor", "prototype"].includes(name) &&
+                    value !== undefined,
+                ),
+              )
+            : {};
         const quantity = Math.max(1, Math.min(50, Math.floor(Number(input.quantity) || 0)));
         if (!type || !model || !quantity) {
           return sendJson(response, 400, { error: "Type, model, and quantity are required" });
@@ -1030,7 +1126,7 @@ export async function createWorkspaceServer(options = {}) {
             });
           }
         }
-        const generationInput = {};
+        const generationInput = { ...parameters };
         if (promptProvided) generationInput.prompt = prompt;
         for (const [field, assigned] of Object.entries(input.sourceFields ?? {})) {
           const ids = Array.isArray(assigned) ? assigned : [assigned];
@@ -1051,6 +1147,7 @@ export async function createWorkspaceServer(options = {}) {
           model,
           prompt,
           promptProvided,
+          parameters,
           quantity,
           sourceFields,
           sourceAssignments: Object.fromEntries(
@@ -1082,6 +1179,7 @@ export async function createWorkspaceServer(options = {}) {
           mode: batch.mode,
           model,
           prompt,
+          parameters,
           input: generationInput,
           sourceFields,
           state: "queued",
@@ -1149,6 +1247,7 @@ export async function createWorkspaceServer(options = {}) {
             (result.type === "image" ? "text-to-image" : "text-to-video"),
           model: result.model,
           prompt: result.prompt,
+          ...(Object.keys(result.parameters ?? {}).length && { parameters: result.parameters }),
           sourceFields: await availableEditSourceFields(batches.get(result.batchId)),
         });
       }
@@ -1212,6 +1311,7 @@ export async function createWorkspaceServer(options = {}) {
           mode: original.mode,
           model: original.model,
           prompt: original.prompt,
+          parameters: original.parameters ?? {},
           input: retryInput,
           sourceFields: original.sourceFields,
           state: "queued",
@@ -1497,37 +1597,52 @@ export async function createWorkspaceServer(options = {}) {
         const preferences = normalizePreferences(
           await readJson(preferencesFile, defaultPreferences),
         );
-        if (url.searchParams.get("refresh") === "1") falCatalogs.delete(type);
-        let catalog = falCatalogs.get(type);
-        if (!catalog) {
-          const categories =
-            type === "image"
-              ? ["text-to-image", "image-to-image"]
-              : ["text-to-video", "image-to-video", "video-to-video"];
-          try {
-            catalog = {
-              payload: await adapters.listFalModels({
-                categories,
-                category: categories[0],
-                expand: "openapi-3.0",
-                key: env.FAL_KEY,
-              }),
-            };
-          } catch (error) {
-            catalog = {
-              payload: await adapters.listFalModels({
-                categories,
-                category: categories[0],
-                key: env.FAL_KEY,
-              }),
-              warning: error instanceof Error ? error.message : "Model schema is unavailable",
-            };
-          }
-          falCatalogs.set(type, catalog);
+        const allMediaCategories = [
+          "text-to-image",
+          "image-to-image",
+          "text-to-video",
+          "image-to-video",
+          "video-to-video",
+        ];
+        if (!falCatalogPromise) {
+          falCatalogPromise = (async () => {
+            try {
+              return {
+                payload: await adapters.listFalModels({
+                  categories: allMediaCategories,
+                  category: allMediaCategories[0],
+                  expand: "openapi-3.0",
+                  key: env.FAL_KEY,
+                }),
+              };
+            } catch (error) {
+              return {
+                payload: await adapters.listFalModels({
+                  categories: allMediaCategories,
+                  category: allMediaCategories[0],
+                  key: env.FAL_KEY,
+                }),
+                warning: error instanceof Error ? error.message : "Model schema is unavailable",
+              };
+            }
+          })();
         }
+        const catalog = await falCatalogPromise;
         const payload = catalog.payload;
+        const relevantCategories =
+          type === "image"
+            ? new Set(["text-to-image", "image-to-image"])
+            : new Set(["text-to-video", "image-to-video", "video-to-video"]);
+        const scopedPayload = {
+          ...payload,
+          models: (payload.models ?? payload.data ?? []).filter(
+            (model) =>
+              !Array.isArray(model.catalogCategories) ||
+              model.catalogCategories.some((category) => relevantCategories.has(category)),
+          ),
+        };
         const query = (url.searchParams.get("search") ?? "").trim().toLowerCase();
-        const models = normalizeFal(payload, preferences.favorites[type], type)
+        const models = normalizeFal(scopedPayload, preferences.favorites[type], type)
           .filter(
             (model) =>
               !query ||
@@ -1535,13 +1650,16 @@ export async function createWorkspaceServer(options = {}) {
               model.id.toLowerCase().includes(query) ||
               model.description.toLowerCase().includes(query),
           )
-          .sort((a, b) => Number(b.favorite) - Number(a.favorite) || a.name.localeCompare(b.name));
+          .sort(
+            (a, b) =>
+              a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }) ||
+              a.id.localeCompare(b.id),
+          );
         const unavailable = models.some((model) => model.schemaStatus === "unavailable");
         return sendJson(response, 200, {
           models,
           ...((catalog.warning || unavailable) && {
             warning: catalog.warning ?? "Some model schemas are unavailable.",
-            retry: `/api/models/${type}?refresh=1`,
           }),
         });
       }

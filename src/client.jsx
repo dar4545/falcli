@@ -9,8 +9,10 @@ import {
   compactText,
   generationIssues,
   mediaAlt,
+  modelCatalogState,
   modelMatchesSearch,
   modelProvider,
+  parameterValueIsValid,
 } from "./workspace-ui.js";
 import "./workspace.css";
 
@@ -91,6 +93,132 @@ function fileAsAttachment(file) {
 
 function ErrorNotice({ error }) {
   return error ? <p class="error" role="alert">{error}</p> : null;
+}
+
+function initialParameters(model, current = {}) {
+  return Object.fromEntries(
+    (model?.parameterFields ?? []).flatMap((field) => {
+      if (
+        Object.hasOwn(current, field.name) &&
+        parameterValueIsValid({ ...field, required: false }, current[field.name])
+      ) {
+        return [[field.name, current[field.name]]];
+      }
+      if (Object.hasOwn(field, "default")) return [[field.name, field.default]];
+      return [];
+    }),
+  );
+}
+
+function ParameterFieldControl({ field, onChange, value }) {
+  const id = `parameter-${field.name}`;
+  const [jsonText, setJsonText] = useState(
+    value === undefined ? "" : JSON.stringify(value, null, 2),
+  );
+  useEffect(() => {
+    setJsonText(value === undefined ? "" : JSON.stringify(value, null, 2));
+  }, [field.name, value]);
+  const common = {
+    "aria-describedby": field.description ? `${id}-description` : undefined,
+    id,
+    required: field.required,
+  };
+  let control;
+  if (field.control === "select") {
+    control = (
+      <select {...common} onChange={(event) => onChange(event.currentTarget.value)} value={value ?? ""}>
+        <option disabled={field.required} value="">
+          {field.required ? "Choose a value" : "Use model default"}
+        </option>
+        {field.options.map((option) => (
+          <option value={String(option)}>{String(option)}</option>
+        ))}
+      </select>
+    );
+  } else if (field.control === "boolean") {
+    control = (
+      <select
+        {...common}
+        onChange={(event) =>
+          onChange(event.currentTarget.value === "" ? undefined : event.currentTarget.value === "true")}
+        value={value === undefined ? "" : String(value)}
+      >
+        <option disabled={field.required} value="">
+          {field.required ? "Choose a value" : "Use model default"}
+        </option>
+        <option value="true">Yes</option>
+        <option value="false">No</option>
+      </select>
+    );
+  } else if (field.control === "number") {
+    control = (
+      <input
+        {...common}
+        max={field.maximum}
+        min={field.minimum}
+        onInput={(event) =>
+          onChange(event.currentTarget.value === "" ? undefined : Number(event.currentTarget.value))}
+        step={field.type === "integer" ? field.step ?? 1 : field.step ?? "any"}
+        type="number"
+        value={value ?? ""}
+      />
+    );
+  } else if (field.control === "json") {
+    control = (
+      <textarea
+        {...common}
+        onInput={(event) => {
+          const text = event.currentTarget.value;
+          setJsonText(text);
+          if (!text.trim()) {
+            event.currentTarget.setCustomValidity(field.required ? "A value is required" : "");
+            onChange(undefined);
+            return;
+          }
+          try {
+            const parsed = JSON.parse(text);
+            event.currentTarget.setCustomValidity("");
+            onChange(parsed);
+          } catch {
+            event.currentTarget.setCustomValidity("Enter valid JSON");
+          }
+        }}
+        rows={3}
+        value={jsonText}
+      />
+    );
+  } else {
+    control = (
+      <input
+        {...common}
+        maxLength={field.maxLength}
+        minLength={field.minLength}
+        onInput={(event) => onChange(event.currentTarget.value || undefined)}
+        pattern={field.pattern}
+        type="text"
+        value={value ?? ""}
+      />
+    );
+  }
+  return (
+    <label class="parameter-field" for={id}>
+      <span class="parameter-label">
+        <span>{field.label}{field.required ? " *" : ""}</span>
+        {field.description && (
+          <span
+            aria-label={field.description}
+            class="parameter-help"
+            id={`${id}-description`}
+            role="img"
+            title={field.description}
+          >
+            ?
+          </span>
+        )}
+      </span>
+      {control}
+    </label>
+  );
 }
 
 function formatTimestamp(value) {
@@ -204,12 +332,13 @@ function TemplateTools({ prompt, setPrompt, templates, type, reload }) {
 
 function ModelSelect({
   matchingModelCount = null,
+  modelError = "",
+  modelLoading = false,
   mediaSearch = "",
   modelWarning = "",
   models,
   onChoose = null,
   onMediaSearch = null,
-  onRefreshModels = null,
   preferences,
   savePreferences,
   selectedId = undefined,
@@ -218,6 +347,11 @@ function ModelSelect({
   const [search, setSearch] = useState("");
   const selected = selectedId ?? preferences.selections[type] ?? "";
   const model = models.find((item) => item.id === selected);
+  const catalogState = modelCatalogState({
+    error: modelError,
+    loading: modelLoading,
+    models,
+  });
   const [chooserOpen, setChooserOpen] = useState(!model);
   const favorite =
     type !== "text" && (preferences.favorites[type] || []).includes(selected);
@@ -227,7 +361,13 @@ function ModelSelect({
       : models;
   const selectedOutsideSearch =
     type === "text" && model && !matches.some((item) => item.id === selected);
-  const options = selectedOutsideSearch ? [model, ...matches] : matches;
+  const options = [...(selectedOutsideSearch ? [model, ...matches] : matches)].sort(
+    (a, b) =>
+      String(a.name).localeCompare(String(b.name), undefined, {
+        numeric: true,
+        sensitivity: "base",
+      }) || String(a.id).localeCompare(String(b.id)),
+  );
 
   useEffect(() => setChooserOpen(!model), [selected, model?.id]);
   useEffect(() => {
@@ -273,43 +413,45 @@ function ModelSelect({
         )}
         {type !== "text" && onMediaSearch && (
           <>
-            <div class="model-search-row">
-              <label>
-                Search {type} models
-                <input
-                  aria-controls={`${type}-model-select`}
-                  onInput={(event) => onMediaSearch(event.currentTarget.value)}
-                  placeholder={`Search ${type} models`}
-                  type="search"
-                  value={mediaSearch}
-                />
-              </label>
-              <button
-                class="secondary outline compact"
-                onClick={onRefreshModels}
-                type="button"
-              >
-                {modelWarning ? "Retry model schemas" : "Refresh models"}
-              </button>
-            </div>
-            {mediaSearch && matchingModelCount === 0 && (
+            <label class="model-search">
+              Search {type} models
+              <input
+                aria-controls={`${type}-model-select`}
+                onInput={(event) => onMediaSearch(event.currentTarget.value)}
+                placeholder={`Search ${type} models`}
+                type="search"
+                value={mediaSearch}
+              />
+            </label>
+            {!modelLoading && mediaSearch && matchingModelCount === 0 && (
               <p class="no-results" role="status">
                 No {type} models match “{mediaSearch}” in this generation mode.
               </p>
             )}
-            {modelWarning && <p class="model-warning" role="status">{modelWarning}</p>}
+            {modelWarning && (
+              <p class="model-warning" role="status">
+                {modelWarning} Restart the app to reload the FAL catalog.
+              </p>
+            )}
           </>
+        )}
+        {catalogState.status && (
+          <p class="model-loading" role="status">
+            {catalogState.status}
+          </p>
         )}
         <div class="model-row">
           <label>
             {type === "text" ? "Model via openrouter/router" : "FAL model"}
             <select
               aria-describedby={`${type}-model-summary`}
+              aria-busy={modelLoading || undefined}
+              disabled={catalogState.disabled}
               id={`${type}-model-select`}
               onChange={(event) => choose(event.currentTarget.value)}
               value={selected}
             >
-              <option value="">Choose a model…</option>
+              <option value="">{catalogState.placeholder}</option>
               {options.map((item) => (
                 <option value={item.id}>
                   {item.favorite ? "★ " : ""}
@@ -806,10 +948,10 @@ function MediaWorkspace({
   batches,
   composer,
   error,
+  modelLoading,
   modelWarning,
   models,
   preferences,
-  refreshModels,
   reloadLibrary,
   reloadModels,
   reloadTemplates,
@@ -912,6 +1054,10 @@ function MediaWorkspace({
       setComposer((current) => ({
         ...current,
         prompt: editable.prompt,
+        parameters: initialParameters(
+          models.find((model) => model.id === editable.model),
+          editable.parameters,
+        ),
         sourceFields: Object.fromEntries(
           Object.entries(editable.sourceFields).map(([field, assigned]) => [
             field,
@@ -941,7 +1087,12 @@ function MediaWorkspace({
           sourceFields[name] = sources;
         }
       }
-      return { ...current, sourceFields, unassigned };
+      return {
+        ...current,
+        parameters: initialParameters(model, current.parameters),
+        sourceFields,
+        unassigned,
+      };
     });
   }
 
@@ -1107,6 +1258,7 @@ function MediaWorkspace({
           mode,
           model: selectedModelId,
           ...(selectedModel?.prompt && { prompt: composer.prompt }),
+          parameters: composer.parameters ?? {},
           quantity: composer.quantity,
           sourceFields,
         }),
@@ -1165,12 +1317,13 @@ function MediaWorkspace({
         </label>
         <ModelSelect
           matchingModelCount={matchingModels.length}
+          modelError={error}
+          modelLoading={modelLoading}
           mediaSearch={search}
           modelWarning={modelWarning}
           models={visibleModels}
           onChoose={chooseModel}
           onMediaSearch={setSearch}
-          onRefreshModels={refreshModels}
           preferences={preferences}
           savePreferences={async (next) => {
             await savePreferences(next);
@@ -1201,6 +1354,38 @@ function MediaWorkspace({
               value={composer.prompt}
             />
           </label>
+        )}
+        {(selectedModel?.parameterFields?.length ?? 0) > 0 && (
+          <details class="parameter-fields" open>
+            <summary>
+              <span>Model parameters</span>
+              <small>{selectedModel.parameterFields.length} schema settings</small>
+            </summary>
+            <div class="parameter-grid">
+              {selectedModel.parameterFields.map((field) => (
+                <ParameterFieldControl
+                  field={field}
+                  onChange={(value) =>
+                    setComposer((current) => {
+                      const parameters = { ...(current.parameters ?? {}) };
+                      if (value === undefined || value === "") delete parameters[field.name];
+                      else if (field.options) {
+                        parameters[field.name] =
+                          field.type === "number" || field.type === "integer"
+                            ? Number(value)
+                            : field.type === "boolean"
+                              ? value === "true"
+                              : value;
+                      } else {
+                        parameters[field.name] = value;
+                      }
+                      return { ...current, parameters };
+                    })}
+                  value={composer.parameters?.[field.name]}
+                />
+              ))}
+            </div>
+          </details>
         )}
         {visibleFileFields.map((field) => (
           <FileFieldControl
@@ -1401,6 +1586,7 @@ function Workspace() {
   const [models, setModels] = useState({ text: [], image: [], video: [] });
   const [modelErrors, setModelErrors] = useState({ text: "", image: "", video: "" });
   const [modelWarnings, setModelWarnings] = useState({ image: "", video: "" });
+  const [modelLoading, setModelLoading] = useState({ text: true, image: true, video: true });
   const [account, setAccount] = useState(null);
   const [accountError, setAccountError] = useState("");
   const [refreshingAccount, setRefreshingAccount] = useState(false);
@@ -1408,15 +1594,16 @@ function Workspace() {
   const [currentId, setCurrentId] = useState("");
   const [batches, setBatches] = useState({ image: [], video: [] });
   const [mediaComposers, setMediaComposers] = useState({
-    image: { prompt: "", quantity: 1, sourceFields: {}, unassigned: [] },
-    video: { prompt: "", quantity: 1, sourceFields: {}, unassigned: [] },
+    image: { prompt: "", parameters: {}, quantity: 1, sourceFields: {}, unassigned: [] },
+    video: { prompt: "", parameters: {}, quantity: 1, sourceFields: {}, unassigned: [] },
   });
   const [library, setLibrary] = useState({ image: [], video: [] });
   const [templates, setTemplates] = useState({ text: [], image: [], video: [] });
 
-  async function loadModels(type, refresh = false) {
+  async function loadModels(type) {
+    setModelLoading((current) => ({ ...current, [type]: true }));
     try {
-      const data = await api(`/api/models/${type}${refresh ? "?refresh=1" : ""}`);
+      const data = await api(`/api/models/${type}`);
       setModels((current) => ({ ...current, [type]: data.models }));
       setModelErrors((current) => ({ ...current, [type]: "" }));
       if (type !== "text") {
@@ -1424,6 +1611,8 @@ function Workspace() {
       }
     } catch (error) {
       setModelErrors((current) => ({ ...current, [type]: error.message }));
+    } finally {
+      setModelLoading((current) => ({ ...current, [type]: false }));
     }
   }
 
@@ -1571,9 +1760,9 @@ function Workspace() {
               composer={mediaComposers[active]}
               error={modelErrors[active]}
               modelWarning={modelWarnings[active]}
+              modelLoading={modelLoading[active]}
               models={models[active]}
               preferences={preferences}
-              refreshModels={() => loadModels(active, true)}
               reloadLibrary={() => reloadLibrary(active)}
               reloadModels={loadModels}
               reloadTemplates={() => reloadTemplates(active)}

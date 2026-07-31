@@ -67,6 +67,13 @@ test("video-to-video keeps source duration and exact ordered video_urls", async 
       mode: "video-to-video",
       model: "fal-ai/video-edit",
       prompt: "continue the motion",
+      parameters: {
+        resolution: "1080p",
+        duration: 12,
+        include_audio: true,
+        aspect_ratio: "16:9",
+        bitrate: 8.5,
+      },
       quantity: 1,
       sourceFields: { video_urls: [second.id, first.id] },
     }),
@@ -85,6 +92,11 @@ test("video-to-video keeps source duration and exact ordered video_urls", async 
   );
   await eventually(() => generatedInputs.length === 1);
   assert.deepEqual(generatedInputs[0], {
+    resolution: "1080p",
+    duration: 12,
+    include_audio: true,
+    aspect_ratio: "16:9",
+    bitrate: 8.5,
     prompt: "continue the motion",
     video_urls: [
       "https://storage.local/second.mp4",

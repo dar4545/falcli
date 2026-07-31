@@ -15,6 +15,93 @@ async function checkedJson(response) {
   return response.json();
 }
 
+const falCatalogWaiters = [];
+let activeFalCatalogRequests = 0;
+
+async function withFalCatalogSlot(task) {
+  if (activeFalCatalogRequests >= 3) {
+    await new Promise((resolve) => falCatalogWaiters.push(resolve));
+  }
+  activeFalCatalogRequests += 1;
+  try {
+    return await task();
+  } finally {
+    activeFalCatalogRequests -= 1;
+    falCatalogWaiters.shift()?.();
+  }
+}
+
+async function fetchFalCatalogPage(url, key, fetchImpl) {
+  let response;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    response = await withFalCatalogSlot(() =>
+      fetchImpl(url, {
+        headers: { authorization: `Key ${key}` },
+      }),
+    );
+    if (response.status !== 429 || attempt === 3) return checkedJson(response);
+    const retryAfter = Number(response.headers.get("retry-after"));
+    await new Promise((resolve) =>
+      setTimeout(resolve, Number.isFinite(retryAfter) ? retryAfter * 1_000 : 1_000 * (attempt + 1)),
+    );
+  }
+  return checkedJson(response);
+}
+
+export async function listFalModels({
+  categories = undefined,
+  category = undefined,
+  expand = undefined,
+  key,
+  fetchImpl = fetch,
+}) {
+  const payloads = await Promise.all(
+    (categories ?? [category]).map(async (value) => {
+      const models = [];
+      const seenCursors = new Set();
+      let cursor = "";
+      do {
+        const url = new URL("https://api.fal.ai/v1/models");
+        url.searchParams.set("category", value);
+        url.searchParams.set("status", "active");
+        // FAL caps expanded OpenAPI responses at 10, while metadata-only pages allow 50.
+        url.searchParams.set("limit", expand ? "10" : "50");
+        if (expand) url.searchParams.set("expand", expand);
+        if (cursor) url.searchParams.set("cursor", cursor);
+        const payload = await fetchFalCatalogPage(url, key, fetchImpl);
+        models.push(...(payload.models ?? payload.data ?? []));
+        if (!payload.has_more) break;
+        const nextCursor = String(payload.next_cursor ?? "");
+        if (!nextCursor || seenCursors.has(nextCursor)) {
+          throw new Error("FAL model catalog returned an invalid pagination cursor");
+        }
+        seenCursors.add(nextCursor);
+        cursor = nextCursor;
+      } while (cursor);
+      return { category: value, models };
+    }),
+  );
+  const models = new Map();
+  for (const payload of payloads) {
+    for (const model of payload.models) {
+      const id = model.endpoint_id ?? model.id ?? model.model_id;
+      const previous = models.get(id);
+      models.set(id, {
+        ...previous,
+        ...model,
+        catalogCategories: [
+          ...new Set([
+            ...(previous?.catalogCategories ?? []),
+            payload.category,
+            ...(model.metadata?.category ? [model.metadata.category] : []),
+          ]),
+        ],
+      });
+    }
+  }
+  return { models: [...models.values()] };
+}
+
 export const defaultAdapters = {
   async cancelMedia({ endpoint, key, requestId }) {
     const client = createFalClient({ credentials: key });
@@ -108,26 +195,7 @@ export const defaultAdapters = {
   },
 
   async listFalModels({ categories, category, expand, key }) {
-    const payloads = await Promise.all(
-      (categories ?? [category]).map(async (value) => {
-        const url = new URL("https://api.fal.ai/v1/models");
-        url.searchParams.set("category", value);
-        url.searchParams.set("status", "active");
-        if (expand) url.searchParams.set("expand", expand);
-        return checkedJson(
-          await fetch(url, {
-            headers: { authorization: `Key ${key}` },
-          }),
-        );
-      }),
-    );
-    const models = new Map();
-    for (const payload of payloads) {
-      for (const model of payload.models ?? payload.data ?? []) {
-        models.set(model.endpoint_id ?? model.id ?? model.model_id, model);
-      }
-    }
-    return { models: [...models.values()] };
+    return listFalModels({ categories, category, expand, key });
   },
 
   async getBilling({ key }) {
