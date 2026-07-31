@@ -1,5 +1,5 @@
 import { createReadStream } from "node:fs";
-import { access, copyFile, mkdir, open, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdir, open, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import http from "node:http";
 import path from "node:path";
@@ -42,6 +42,53 @@ async function cleanTemp(directory) {
 function sendJson(response, status, value) {
   response.writeHead(status, { "content-type": "application/json; charset=utf-8" });
   response.end(JSON.stringify(value));
+}
+
+async function sendFile(request, response, filePath, contentType) {
+  const { size } = await stat(filePath);
+  const range = request.headers.range;
+  const headers = {
+    "accept-ranges": "bytes",
+    "content-type": contentType,
+  };
+
+  if (!range) {
+    response.writeHead(200, { ...headers, "content-length": size });
+    return size ? createReadStream(filePath).pipe(response) : response.end();
+  }
+
+  const match = typeof range === "string" && range.match(/^bytes=(\d*)-(\d*)$/);
+  if (!match || (!match[1] && !match[2])) {
+    response.writeHead(416, { ...headers, "content-range": `bytes */${size}` });
+    return response.end();
+  }
+
+  let start;
+  let end;
+  if (!match[1]) {
+    const suffixLength = Number(match[2]);
+    if (!suffixLength) {
+      response.writeHead(416, { ...headers, "content-range": `bytes */${size}` });
+      return response.end();
+    }
+    start = Math.max(size - suffixLength, 0);
+    end = size - 1;
+  } else {
+    start = Number(match[1]);
+    end = match[2] ? Math.min(Number(match[2]), size - 1) : size - 1;
+  }
+
+  if (!size || start >= size || start > end) {
+    response.writeHead(416, { ...headers, "content-range": `bytes */${size}` });
+    return response.end();
+  }
+
+  response.writeHead(206, {
+    ...headers,
+    "content-length": end - start + 1,
+    "content-range": `bytes ${start}-${end}/${size}`,
+  });
+  return createReadStream(filePath, { start, end }).pipe(response);
 }
 
 function sendEvent(response, value) {
@@ -1084,10 +1131,12 @@ export async function createWorkspaceServer(options = {}) {
       if (resultFileMatch && request.method === "GET") {
         const result = results.get(resultFileMatch[1]);
         if (!result?.filePath) return sendJson(response, 404, { error: "Result file not found" });
-        response.writeHead(200, {
-          "content-type": contentTypes[path.extname(result.filePath)] ?? "application/octet-stream",
-        });
-        return createReadStream(result.filePath).pipe(response);
+        return sendFile(
+          request,
+          response,
+          result.filePath,
+          contentTypes[path.extname(result.filePath)] ?? "application/octet-stream",
+        );
       }
       const editInputMatch = url.pathname.match(/^\/api\/results\/([^/]+)\/edit-input$/);
       if (editInputMatch && request.method === "GET") {
