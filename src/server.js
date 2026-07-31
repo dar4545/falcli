@@ -1527,12 +1527,37 @@ export async function createWorkspaceServer(options = {}) {
     libraryDir,
     listen(port = 0, host = "127.0.0.1") {
       return new Promise((resolve, reject) => {
-        server.once("error", reject);
-        server.listen(port, host, () => {
-          const address = server.address();
-          if (!address || typeof address === "string") return reject(new Error("No server address"));
-          resolve(`http://${host}:${address.port}`);
-        });
+        const tryListen = (candidatePort) => {
+          const handleError = (error) => {
+            server.off("listening", handleListening);
+            if (error?.code === "EADDRINUSE" && candidatePort !== 0) {
+              tryListen(candidatePort < 65_535 ? candidatePort + 1 : 0);
+              return;
+            }
+            reject(error);
+          };
+          const handleListening = () => {
+            server.off("error", handleError);
+            const address = server.address();
+            if (!address || typeof address === "string") {
+              reject(new Error("No server address"));
+              return;
+            }
+            resolve(`http://${host}:${address.port}`);
+          };
+
+          server.once("error", handleError);
+          server.once("listening", handleListening);
+          try {
+            server.listen(candidatePort, host);
+          } catch (error) {
+            server.off("error", handleError);
+            server.off("listening", handleListening);
+            reject(error);
+          }
+        };
+
+        tryListen(port);
       });
     },
     async close() {

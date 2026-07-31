@@ -23,9 +23,10 @@ Local Preact workspace for FAL-powered Chat, Image, and Video generation.
    pnpm start
    ```
 
-Open `http://127.0.0.1:4173`. Generated work is temporary until you choose **Keep**.
-Durable items live under `library/`; unkept files under `temp/` are removed at startup
-and graceful shutdown.
+Open the address printed by the server. It prefers `http://127.0.0.1:4173` and
+automatically selects the next available port if that one is already in use. Generated
+work is temporary until you choose **Keep**. Durable items live under `library/`; unkept
+files under `temp/` are removed at startup and graceful shutdown.
 
 `FAL_KEY` enables generation and FAL model discovery. The account usage panel additionally
 requires that key to have FAL Admin scope; an ordinary generation key can still generate
