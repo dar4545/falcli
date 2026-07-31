@@ -1,7 +1,10 @@
 import "@picocss/pico/css/pico.min.css";
 import { render } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
-import { allowsMultipleFileSelection } from "./media-file-selection.js";
+import {
+  allowsMultipleFileSelection,
+  mergeSelectedSources,
+} from "./media-file-selection.js";
 import {
   compactText,
   generationIssues,
@@ -990,26 +993,22 @@ function MediaWorkspace({
       for (const file of files) {
         staged.push(await stageMediaSource(file, await readVideoDuration(file)));
       }
-      const previous = composer.sourceFields[field.name] ?? [];
-      if (field.cardinality === "single") {
-        for (const source of previous) {
-          await api(`/api/media-sources/${source.id}`, { method: "DELETE" }).catch(() => {});
-        }
-      }
-      setComposer((current) => ({
-        ...current,
-        sourceFields: {
-          ...current.sourceFields,
-          [field.name]:
-            field.cardinality === "array"
-              ? [...(current.sourceFields[field.name] ?? []), ...staged]
-              : staged.slice(0, 1),
-        },
-        unassigned:
-          field.cardinality === "single" && staged.length > 1
-            ? [...current.unassigned, ...staged.slice(1)]
-            : current.unassigned,
-      }));
+      setComposer((current) => {
+        const selected = mergeSelectedSources({
+          cardinality: field.cardinality,
+          existing: current.sourceFields[field.name] ?? [],
+          staged,
+          unassigned: current.unassigned,
+        });
+        return {
+          ...current,
+          sourceFields: {
+            ...current.sourceFields,
+            [field.name]: selected.assigned,
+          },
+          unassigned: selected.unassigned,
+        };
+      });
     } catch (caught) {
       setLocalError(caught.message);
     }

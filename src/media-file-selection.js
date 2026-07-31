@@ -10,3 +10,23 @@ const mediaModes = new Set([
 export function allowsMultipleFileSelection(mode, field) {
   return mediaModes.has(mode) || field.cardinality === "array";
 }
+
+export function mergeSelectedSources({
+  cardinality,
+  existing,
+  staged,
+  unassigned,
+}) {
+  if (cardinality === "array") {
+    return {
+      assigned: [...existing, ...staged],
+      unassigned,
+    };
+  }
+
+  const selected = [...existing, ...staged];
+  return {
+    assigned: selected.slice(0, 1),
+    unassigned: [...unassigned, ...selected.slice(1)],
+  };
+}
