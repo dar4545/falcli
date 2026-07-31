@@ -200,8 +200,13 @@ function TemplateTools({ prompt, setPrompt, templates, type, reload }) {
 }
 
 function ModelSelect({
+  matchingModelCount = null,
+  mediaSearch = "",
+  modelWarning = "",
   models,
   onChoose = null,
+  onMediaSearch = null,
+  onRefreshModels = null,
   preferences,
   savePreferences,
   selectedId = undefined,
@@ -222,6 +227,9 @@ function ModelSelect({
   const options = selectedOutsideSearch ? [model, ...matches] : matches;
 
   useEffect(() => setChooserOpen(!model), [selected, model?.id]);
+  useEffect(() => {
+    if (type !== "text" && mediaSearch.trim()) setChooserOpen(true);
+  }, [mediaSearch, type]);
 
   async function choose(id) {
     if (onChoose) return onChoose(id);
@@ -259,6 +267,35 @@ function ModelSelect({
               value={search}
             />
           </label>
+        )}
+        {type !== "text" && onMediaSearch && (
+          <>
+            <div class="model-search-row">
+              <label>
+                Search {type} models
+                <input
+                  aria-controls={`${type}-model-select`}
+                  onInput={(event) => onMediaSearch(event.currentTarget.value)}
+                  placeholder={`Search ${type} models`}
+                  type="search"
+                  value={mediaSearch}
+                />
+              </label>
+              <button
+                class="secondary outline compact"
+                onClick={onRefreshModels}
+                type="button"
+              >
+                {modelWarning ? "Retry model schemas" : "Refresh models"}
+              </button>
+            </div>
+            {mediaSearch && matchingModelCount === 0 && (
+              <p class="no-results" role="status">
+                No {type} models match “{mediaSearch}” in this generation mode.
+              </p>
+            )}
+            {modelWarning && <p class="model-warning" role="status">{modelWarning}</p>}
+          </>
         )}
         <div class="model-row">
           <label>
@@ -827,6 +864,8 @@ function MediaWorkspace({
     ? `${account.remainingCredits.toFixed(2)} credits`
     : "unavailable";
 
+  useEffect(() => setSearch(""), [type]);
+
   function setSelected(id, checked) {
     setSelectedState((current) => {
       const next = new Set(current);
@@ -1126,8 +1165,13 @@ function MediaWorkspace({
           </select>
         </label>
         <ModelSelect
+          matchingModelCount={matchingModels.length}
+          mediaSearch={search}
+          modelWarning={modelWarning}
           models={visibleModels}
           onChoose={chooseModel}
+          onMediaSearch={setSearch}
+          onRefreshModels={refreshModels}
           preferences={preferences}
           savePreferences={async (next) => {
             await savePreferences(next);
@@ -1243,21 +1287,6 @@ function MediaWorkspace({
             type={type}
           />
         )}
-        <div class="model-search-row">
-          <label>
-            Search models
-            <input onInput={(event) => setSearch(event.currentTarget.value)} placeholder={`Search ${type} models`} type="search" value={search} />
-          </label>
-          <button class="secondary outline compact" onClick={refreshModels} type="button">
-            {modelWarning ? "Retry model schemas" : "Refresh models"}
-          </button>
-        </div>
-        {search && !matchingModels.length && (
-          <p class="no-results" role="status">
-            No {type} models match “{search}” in this generation mode.
-          </p>
-        )}
-        {modelWarning && <p class="model-warning" role="status">{modelWarning}</p>}
         <ErrorNotice error={localError || error} />
       </form>
       <section class="batch-preview">
