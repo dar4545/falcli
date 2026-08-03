@@ -1,7 +1,24 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { listFalModels } from "../src/upstreams.js";
+import { defaultAdapters, listFalModels } from "../src/upstreams.js";
+
+test("FAL billing uses the account billing endpoint", async () => {
+  const payload = await defaultAdapters.getBilling({
+    key: "admin-key",
+    async fetchImpl(url, options) {
+      assert.equal(url.origin + url.pathname, "https://api.fal.ai/v1/account/billing");
+      assert.equal(url.searchParams.get("expand"), "credits");
+      assert.equal(options.headers.authorization, "Key admin-key");
+      return new Response(JSON.stringify({ balance: 19.5 }), {
+        headers: { "content-type": "application/json" },
+        status: 200,
+      });
+    },
+  });
+
+  assert.deepEqual(payload, { balance: 19.5 });
+});
 
 test("FAL model discovery exhausts every category page and deduplicates endpoints", async () => {
   const calls = [];

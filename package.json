@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
+    "history:report": "node --env-file-if-exists=.env scripts/fal-history-report.mjs",
+    "history:verify": "node --env-file-if-exists=.env scripts/verify-fal-history-live.mjs",
     "prestart": "vite build",
     "start": "node --env-file-if-exists=.env src/main.js",
     "test": "node --test",

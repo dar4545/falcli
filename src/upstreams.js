@@ -198,9 +198,11 @@ export const defaultAdapters = {
     return listFalModels({ categories, category, expand, key });
   },
 
-  async getBilling({ key }) {
+  async getBilling({ key, fetchImpl = fetch }) {
+    const url = new URL("https://api.fal.ai/v1/account/billing");
+    url.searchParams.set("expand", "credits");
     return checkedJson(
-      await fetch("https://api.fal.ai/v1/account/billing?expand=credits", {
+      await fetchImpl(url, {
         headers: { authorization: `Key ${key}` },
       }),
     );

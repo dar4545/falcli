@@ -4,3 +4,5 @@ dist/
 temp/
 library/
 .env
+history/*
+.scratch/*

@@ -146,7 +146,7 @@ test("account refresh aggregates month and seven-day usage and retains stale val
     async getBilling({ key }) {
       assert.equal(key, "admin-key");
       if (fail) throw new Error("Admin scope required");
-      return { username: "local-user", credits: { balance: 19.5 } };
+      return { username: "local-user", credits: { current_balance: 19.5, currency: "USD" } };
     },
     async getUsage() {
       return {

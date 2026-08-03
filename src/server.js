@@ -355,7 +355,11 @@ function accountSummary(billing, usage, now) {
   return {
     username: billing.username ?? billing.user?.username ?? billing.account?.username ?? "",
     remainingCredits: Number(
-      billing.credits?.balance ?? billing.current_balance ?? billing.balance ?? 0,
+      billing.credits?.current_balance ??
+        billing.credits?.balance ??
+        billing.current_balance ??
+        billing.balance ??
+        0,
     ),
     monthSpend: rows
       .filter((row) => String(row.date ?? row.day ?? row.timestamp ?? "").slice(0, 10) >= monthStart)
