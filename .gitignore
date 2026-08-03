@@ -6,3 +6,8 @@ library/
 .env
 history/*
 .scratch/*
+.tmp*
+.acceptance*
+.pytest*
+materials/
+docs/
