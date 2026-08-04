@@ -13,6 +13,7 @@ import {
   modelMatchesSearch,
   modelProvider,
   parameterValueIsValid,
+  resultRefreshesAccount,
 } from "./workspace-ui.js";
 import "./workspace.css";
 
@@ -1694,6 +1695,7 @@ function Workspace() {
           results: batch.results.map((item) => (item.id === result.id ? result : item)),
         })),
       }));
+      if (resultRefreshesAccount(result)) void refreshAccount();
     });
     return () => events.close();
   }, []);
