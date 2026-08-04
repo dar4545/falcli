@@ -2,13 +2,108 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  generationTabs,
   generationIssues,
   mediaAlt,
+  mediaPreviewTag,
   modelCatalogState,
   modelMatchesSearch,
   parameterValueIsValid,
+  reconcileBatchResults,
   resultRefreshesAccount,
 } from "../src/workspace-ui.js";
+
+test("workspace offers Audio as a generation tab", () => {
+  assert.deepEqual(generationTabs(), ["text", "image", "video", "audio"]);
+});
+
+test("Audio results render with the native audio player", () => {
+  assert.equal(mediaPreviewTag("audio"), "audio");
+});
+
+test("a result event received before its Batch is reconciled when the POST response arrives", () => {
+  const queued = {
+    id: "result-1",
+    batchId: "batch-1",
+    type: "audio",
+    state: "queued",
+    fileUrl: "",
+  };
+  const completed = {
+    ...queued,
+    state: "completed",
+    fileUrl: "/api/results/result-1/file",
+  };
+
+  const beforeBatch = reconcileBatchResults(
+    { batches: [], pendingResults: [] },
+    { kind: "result", result: completed },
+  );
+  assert.deepEqual(beforeBatch, { batches: [], pendingResults: [completed] });
+
+  const afterBatch = reconcileBatchResults(beforeBatch, {
+    kind: "batch",
+    batch: { id: "batch-1", type: "audio", results: [queued] },
+  });
+  assert.deepEqual(afterBatch, {
+    batches: [
+      {
+        id: "batch-1",
+        type: "audio",
+        results: [completed],
+      },
+    ],
+    pendingResults: [],
+  });
+});
+
+test("a result event received after its Batch updates the visible result immediately", () => {
+  const queued = {
+    id: "result-2",
+    batchId: "batch-2",
+    type: "audio",
+    state: "queued",
+    fileUrl: "",
+  };
+  const completed = {
+    ...queued,
+    state: "completed",
+    fileUrl: "/api/results/result-2/file",
+  };
+
+  assert.deepEqual(
+    reconcileBatchResults(
+      {
+        batches: [{ id: "batch-2", type: "audio", results: [queued] }],
+        pendingResults: [],
+      },
+      { kind: "result", result: completed },
+    ),
+    {
+      batches: [{ id: "batch-2", type: "audio", results: [completed] }],
+      pendingResults: [],
+    },
+  );
+});
+
+test("unmatched result events keep only the most recent bounded pending entries", () => {
+  let state = { batches: [], pendingResults: [] };
+  for (let index = 0; index < 205; index += 1) {
+    state = reconcileBatchResults(state, {
+      kind: "result",
+      result: {
+        id: `result-${index}`,
+        batchId: `batch-${index}`,
+        type: "audio",
+        state: "completed",
+      },
+    });
+  }
+
+  assert.equal(state.pendingResults.length, 200);
+  assert.equal(state.pendingResults[0].id, "result-5");
+  assert.equal(state.pendingResults.at(-1).id, "result-204");
+});
 
 test("only a returned FAL generation refreshes the account balance", () => {
   assert.equal(resultRefreshesAccount({ state: "completed" }), true);

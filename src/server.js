@@ -17,9 +17,12 @@ const contentTypes = {
   ".js": "text/javascript; charset=utf-8",
   ".jpeg": "image/jpeg",
   ".jpg": "image/jpeg",
+  ".mp3": "audio/mpeg",
   ".mp4": "video/mp4",
+  ".ogg": "audio/ogg",
   ".png": "image/png",
   ".svg": "image/svg+xml",
+  ".wav": "audio/wav",
   ".webm": "video/webm",
   ".webp": "image/webp",
 };
@@ -262,6 +265,13 @@ function modesFor(type, fields) {
       ...(fields.length ? ["image-to-image"] : []),
     ];
   }
+  if (type === "audio") {
+    const audio = fields.some((field) => field.mediaType === "audio");
+    return [
+      ...(!requiredFiles ? ["text-to-speech"] : []),
+      ...(audio ? ["speech-to-speech"] : []),
+    ];
+  }
   const image = fields.some((field) => field.mediaType === "image");
   const video = fields.some((field) => field.mediaType === "video");
   return [
@@ -285,7 +295,13 @@ function normalizeFal(payload, favorites, type) {
         description: metadata.description ?? model.description ?? "",
         thumbnail: metadata.thumbnail_url ?? model.thumbnail_url ?? model.thumbnail ?? "",
         favorite: favorites.includes(id),
-        modes: [type === "image" ? "text-to-image" : "text-to-video"],
+        modes: [
+          type === "image"
+            ? "text-to-image"
+            : type === "audio"
+              ? "text-to-speech"
+              : "text-to-video",
+        ],
         prompt: {
           name: "prompt",
           label: "Prompt",
@@ -325,6 +341,15 @@ function normalizeFal(payload, favorites, type) {
               label: labelFor("prompt", promptSchema),
               description: promptSchema.description ?? "",
               required: required.has("prompt"),
+              ...(Number.isFinite(promptSchema.minLength) && {
+                minLength: promptSchema.minLength,
+              }),
+              ...(Number.isFinite(promptSchema.maxLength) && {
+                maxLength: promptSchema.maxLength,
+              }),
+              ...(typeof promptSchema.pattern === "string" && {
+                pattern: promptSchema.pattern,
+              }),
             }
           : null,
       fileFields: fields,
@@ -405,6 +430,9 @@ function extensionFor(contentType, url) {
     "image/jpeg": ".jpg",
     "image/png": ".png",
     "image/webp": ".webp",
+    "audio/mpeg": ".mp3",
+    "audio/ogg": ".ogg",
+    "audio/wav": ".wav",
     "video/mp4": ".mp4",
     "video/webm": ".webm",
   }[contentType.split(";")[0].toLowerCase()];
@@ -477,7 +505,7 @@ async function loadKeptConversations(libraryDir) {
 
 async function loadKeptResults(libraryDir) {
   const loaded = [];
-  for (const type of ["image", "video"]) {
+  for (const type of ["image", "video", "audio"]) {
     const directory = path.join(libraryDir, type);
     await mkdir(directory, { recursive: true });
     for (const entry of await readdir(directory)) {
@@ -539,10 +567,10 @@ export async function createWorkspaceServer(options = {}) {
     storage: { durable, temporary },
   };
   const defaultPreferences = {
-    favorites: { image: [], video: [] },
-    selections: { text: "", image: "", video: "" },
-    modes: { image: "text-to-image", video: "text-to-video" },
-    modeSelections: { image: {}, video: {} },
+    favorites: { image: [], video: [], audio: [] },
+    selections: { text: "", image: "", video: "", audio: "" },
+    modes: { image: "text-to-image", video: "text-to-video", audio: "text-to-speech" },
+    modeSelections: { image: {}, video: {}, audio: {} },
     concurrency: 2,
   };
   function normalizePreferences(value = {}) {
@@ -550,10 +578,12 @@ export async function createWorkspaceServer(options = {}) {
       text: String(value.selections?.text ?? ""),
       image: String(value.selections?.image ?? ""),
       video: String(value.selections?.video ?? ""),
+      audio: String(value.selections?.audio ?? ""),
     };
     const modes = {
       image: String(value.modes?.image ?? "text-to-image"),
       video: String(value.modes?.video ?? "text-to-video"),
+      audio: String(value.modes?.audio ?? "text-to-speech"),
     };
     const selectionMap = (type) => {
       const saved = Object.fromEntries(
@@ -569,12 +599,14 @@ export async function createWorkspaceServer(options = {}) {
       favorites: {
         image: Array.isArray(value.favorites?.image) ? value.favorites.image : [],
         video: Array.isArray(value.favorites?.video) ? value.favorites.video : [],
+        audio: Array.isArray(value.favorites?.audio) ? value.favorites.audio : [],
       },
       selections,
       modes,
       modeSelections: {
         image: selectionMap("image"),
         video: selectionMap("video"),
+        audio: selectionMap("audio"),
       },
       concurrency: Math.max(1, Math.min(20, Number(value.concurrency) || 2)),
     };
@@ -939,7 +971,7 @@ export async function createWorkspaceServer(options = {}) {
         }
         if (request.method === "POST") {
           const input = await readBody(request);
-          const type = ["text", "image", "video"].includes(input.type) ? input.type : "";
+          const type = ["text", "image", "video", "audio"].includes(input.type) ? input.type : "";
           const name = String(input.name ?? "").trim();
           const prompt = String(input.prompt ?? "");
           if (!type || !name || !prompt.trim()) {
@@ -1075,7 +1107,14 @@ export async function createWorkspaceServer(options = {}) {
       if (url.pathname === "/api/batches" && request.method === "POST") {
         if (!env.FAL_KEY) return sendJson(response, 503, { error: readiness.generation.message });
         const input = await readBody(request);
-        const type = input.type === "video" ? "video" : input.type === "image" ? "image" : "";
+        const type =
+          input.type === "video"
+            ? "video"
+            : input.type === "image"
+              ? "image"
+              : input.type === "audio"
+                ? "audio"
+                : "";
         const model = String(input.model ?? "").trim();
         const promptProvided = Object.hasOwn(input, "prompt");
         const prompt = String(input.prompt ?? "");
@@ -1146,7 +1185,12 @@ export async function createWorkspaceServer(options = {}) {
           id: randomUUID(),
           type,
           mode: String(
-            input.mode ?? (type === "image" ? "text-to-image" : "text-to-video"),
+            input.mode ??
+              (type === "image"
+                ? "text-to-image"
+                : type === "audio"
+                  ? "text-to-speech"
+                  : "text-to-video"),
           ),
           model,
           prompt,
@@ -1248,7 +1292,11 @@ export async function createWorkspaceServer(options = {}) {
           type: result.type,
           mode:
             result.mode ??
-            (result.type === "image" ? "text-to-image" : "text-to-video"),
+            (result.type === "image"
+              ? "text-to-image"
+              : result.type === "audio"
+                ? "text-to-speech"
+                : "text-to-video"),
           model: result.model,
           prompt: result.prompt,
           ...(Object.keys(result.parameters ?? {}).length && { parameters: result.parameters }),
@@ -1583,7 +1631,7 @@ export async function createWorkspaceServer(options = {}) {
           });
         }
       }
-      const modelMatch = url.pathname.match(/^\/api\/models\/(text|image|video)$/);
+      const modelMatch = url.pathname.match(/^\/api\/models\/(text|image|video|audio)$/);
       if (modelMatch && request.method === "GET") {
         const type = modelMatch[1];
         if (type === "text") {
@@ -1607,6 +1655,8 @@ export async function createWorkspaceServer(options = {}) {
           "text-to-video",
           "image-to-video",
           "video-to-video",
+          "text-to-speech",
+          "speech-to-speech",
         ];
         if (!falCatalogPromise) {
           falCatalogPromise = (async () => {
@@ -1636,7 +1686,9 @@ export async function createWorkspaceServer(options = {}) {
         const relevantCategories =
           type === "image"
             ? new Set(["text-to-image", "image-to-image"])
-            : new Set(["text-to-video", "image-to-video", "video-to-video"]);
+            : type === "audio"
+              ? new Set(["text-to-speech", "speech-to-speech"])
+              : new Set(["text-to-video", "image-to-video", "video-to-video"]);
         const scopedPayload = {
           ...payload,
           models: (payload.models ?? payload.data ?? []).filter(

@@ -1,6 +1,6 @@
 # FAL Generation Workspace
 
-Local Preact workspace for FAL-powered Chat, Image, and Video generation.
+Local Preact workspace for FAL-powered Chat, Image, Video, and Audio generation.
 
 ## Start
 

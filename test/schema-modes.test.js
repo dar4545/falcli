@@ -569,6 +569,7 @@ test("favorites stay tab-wide while mode and model selections survive restart pe
   assert.deepEqual(saved.modes, {
     image: "image-to-image",
     video: "video-to-video",
+    audio: "text-to-speech",
   });
   assert.equal(saved.modeSelections.image["text-to-image"], "fal-ai/text-model");
   assert.equal(saved.modeSelections.image["image-to-image"], "fal-ai/multipurpose");

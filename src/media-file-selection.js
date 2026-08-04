@@ -5,6 +5,8 @@ const mediaModes = new Set([
   "image-to-video",
   "video-to-video",
   "mixed-references-to-video",
+  "text-to-speech",
+  "speech-to-speech",
 ]);
 
 export function allowsMultipleFileSelection(mode, field) {

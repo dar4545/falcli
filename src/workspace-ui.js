@@ -1,3 +1,51 @@
+export function generationTabs() {
+  return ["text", "image", "video", "audio"];
+}
+
+function applyResultToBatch(batch, result) {
+  if (batch.id !== result.batchId) return batch;
+  return {
+    ...batch,
+    ...(result.sourceFields && { sourceFields: result.sourceFields }),
+    results: batch.results.some((item) => item.id === result.id)
+      ? batch.results.map((item) => (item.id === result.id ? result : item))
+      : [...batch.results, result],
+  };
+}
+
+export function reconcileBatchResults(state, incoming, pendingLimit = 200) {
+  if (incoming.kind === "batch") {
+    const matching = state.pendingResults.filter(
+      (result) => result.batchId === incoming.batch.id,
+    );
+    const batch = matching.reduce(applyResultToBatch, incoming.batch);
+    return {
+      batches: [batch, ...state.batches.filter((item) => item.id !== batch.id)],
+      pendingResults: state.pendingResults.filter(
+        (result) => result.batchId !== incoming.batch.id,
+      ),
+    };
+  }
+
+  const matched = state.batches.some((batch) => batch.id === incoming.result.batchId);
+  if (matched) {
+    return {
+      batches: state.batches.map((batch) => applyResultToBatch(batch, incoming.result)),
+      pendingResults: state.pendingResults.filter(
+        (result) => result.id !== incoming.result.id,
+      ),
+    };
+  }
+  const pendingResults = [
+    ...state.pendingResults.filter((result) => result.id !== incoming.result.id),
+    incoming.result,
+  ];
+  return {
+    batches: state.batches,
+    pendingResults: pendingResults.slice(-Math.max(1, pendingLimit)),
+  };
+}
+
 export function modelProvider(model) {
   if (model?.provider) return String(model.provider);
   const [provider] = String(model?.id ?? "").split("/");
@@ -90,6 +138,15 @@ export function generationIssues({
   }
   if (selectedModel?.prompt?.required && !composer.prompt.trim()) {
     issues.push(`enter ${selectedModel.prompt.label || "the required prompt"}`);
+  } else if (
+    selectedModel?.prompt &&
+    composer.prompt &&
+    !parameterValueIsValid(
+      { ...selectedModel.prompt, type: "string", required: false },
+      composer.prompt,
+    )
+  ) {
+    issues.push(`enter a valid ${selectedModel.prompt.label || "prompt"}`);
   }
   for (const field of visibleFileFields.filter((item) => item.required)) {
     if (!(composer.sourceFields[field.name] ?? []).length) {
@@ -124,9 +181,13 @@ export function compactText(value, maximum = 120) {
 }
 
 export function mediaAlt(result, type) {
-  const kind = type === "video" ? "video" : "image";
+  const kind = type === "video" ? "video" : type === "audio" ? "audio" : "image";
   const prompt = compactText(result?.prompt, 140);
   if (prompt) return `Generated ${kind}: ${prompt}`;
   if (result?.model) return `Generated ${kind} from ${result.model}`;
   return `Generated ${kind} result`;
+}
+
+export function mediaPreviewTag(type) {
+  return type === "audio" ? "audio" : type === "video" ? "video" : "img";
 }

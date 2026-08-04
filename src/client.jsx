@@ -7,17 +7,20 @@ import {
 } from "./media-file-selection.js";
 import {
   compactText,
+  generationTabs,
   generationIssues,
   mediaAlt,
+  mediaPreviewTag,
   modelCatalogState,
   modelMatchesSearch,
   modelProvider,
   parameterValueIsValid,
+  reconcileBatchResults,
   resultRefreshesAccount,
 } from "./workspace-ui.js";
 import "./workspace.css";
 
-const tabs = ["text", "image", "video"];
+const tabs = generationTabs();
 
 async function api(url, options) {
   const response = await fetch(url, options);
@@ -871,6 +874,7 @@ function FileFieldControl({
 }
 
 function ResultCard({ onEdit, result, selected, setSelected, type, updateResult }) {
+  const MediaPlayer = mediaPreviewTag(type);
   async function action(path, method = "POST") {
     const updated = await api(`/api/results/${result.id}${path}`, { method });
     if (updated) updateResult(updated);
@@ -894,8 +898,8 @@ function ResultCard({ onEdit, result, selected, setSelected, type, updateResult 
           <img alt={mediaAlt(result, type)} loading="lazy" src={result.fileUrl} />
         </a>
       )}
-      {result.fileUrl && type === "video" && (
-        <video aria-label={mediaAlt(result, type)} controls preload="metadata" src={result.fileUrl} />
+      {result.fileUrl && ["video", "audio"].includes(type) && (
+        <MediaPlayer aria-label={mediaAlt(result, type)} controls preload="metadata" src={result.fileUrl} />
       )}
       <small class="result-meta">
         {result.model}
@@ -942,10 +946,15 @@ const mediaModes = {
     ["video-to-video", "Video to Video"],
     ["mixed-references-to-video", "Mixed References to Video"],
   ],
+  audio: [
+    ["text-to-speech", "Text to Speech"],
+    ["speech-to-speech", "Speech to Speech"],
+  ],
 };
 
 function MediaWorkspace({
   account,
+  addBatch,
   batches,
   composer,
   error,
@@ -992,7 +1001,7 @@ function MediaWorkspace({
     [mode, models, search, selectedModelId],
   );
   const visibleFileFields =
-    mode === "text-to-image" || mode === "text-to-video"
+    mode === "text-to-image" || mode === "text-to-video" || mode === "text-to-speech"
       ? selectedModel?.fileFields?.filter((field) => field.required) ?? []
       : selectedModel?.fileFields ?? [];
   const selectedResults = batches
@@ -1266,7 +1275,7 @@ function MediaWorkspace({
         headers: { "content-type": "application/json" },
         method: "POST",
       });
-      setBatches((current) => [batch, ...current]);
+      addBatch(type, batch);
       setComposer((current) => ({
         ...current,
         sourceFields: Object.fromEntries(
@@ -1345,6 +1354,8 @@ function MediaWorkspace({
             <textarea
               aria-describedby={promptMissing ? `${type}-prompt-requirement` : undefined}
               aria-invalid={promptMissing || undefined}
+              maxLength={selectedModel.prompt.maxLength}
+              minLength={selectedModel.prompt.minLength}
               onInput={(event) =>
                 setComposer((current) => ({
                   ...current,
@@ -1547,6 +1558,7 @@ function MediaWorkspace({
 }
 
 function Library({ results, type }) {
+  const MediaPlayer = mediaPreviewTag(type);
   const kept = results.filter((result) => result.state === "kept");
   if (!kept.length) return null;
   return (
@@ -1558,7 +1570,7 @@ function Library({ results, type }) {
             {type === "image" ? (
               <img alt={mediaAlt(result, type)} loading="lazy" src={result.fileUrl} />
             ) : (
-              <video aria-label={mediaAlt(result, type)} controls preload="metadata" src={result.fileUrl} />
+              <MediaPlayer aria-label={mediaAlt(result, type)} controls preload="metadata" src={result.fileUrl} />
             )}
             <small class="result-meta">
               <span class={`status ${result.state}`}>{result.state}</span>
@@ -1577,29 +1589,31 @@ function Workspace() {
   const [active, setActive] = useState("text");
   const [readiness, setReadiness] = useState(null);
   const [preferences, setPreferences] = useState({
-    favorites: { image: [], video: [] },
-    selections: { text: "", image: "", video: "" },
-    modes: { image: "text-to-image", video: "text-to-video" },
-    modeSelections: { image: {}, video: {} },
+    favorites: { image: [], video: [], audio: [] },
+    selections: { text: "", image: "", video: "", audio: "" },
+    modes: { image: "text-to-image", video: "text-to-video", audio: "text-to-speech" },
+    modeSelections: { image: {}, video: {}, audio: {} },
     concurrency: 2,
   });
   const [preferencesLoaded, setPreferencesLoaded] = useState(false);
-  const [models, setModels] = useState({ text: [], image: [], video: [] });
-  const [modelErrors, setModelErrors] = useState({ text: "", image: "", video: "" });
-  const [modelWarnings, setModelWarnings] = useState({ image: "", video: "" });
-  const [modelLoading, setModelLoading] = useState({ text: true, image: true, video: true });
+  const [models, setModels] = useState({ text: [], image: [], video: [], audio: [] });
+  const [modelErrors, setModelErrors] = useState({ text: "", image: "", video: "", audio: "" });
+  const [modelWarnings, setModelWarnings] = useState({ image: "", video: "", audio: "" });
+  const [modelLoading, setModelLoading] = useState({ text: true, image: true, video: true, audio: true });
   const [account, setAccount] = useState(null);
   const [accountError, setAccountError] = useState("");
   const [refreshingAccount, setRefreshingAccount] = useState(false);
   const [conversations, setConversations] = useState([]);
   const [currentId, setCurrentId] = useState("");
-  const [batches, setBatches] = useState({ image: [], video: [] });
+  const [batches, setBatches] = useState({ image: [], video: [], audio: [] });
+  const pendingResultEvents = useRef([]);
   const [mediaComposers, setMediaComposers] = useState({
     image: { prompt: "", parameters: {}, quantity: 1, sourceFields: {}, unassigned: [] },
     video: { prompt: "", parameters: {}, quantity: 1, sourceFields: {}, unassigned: [] },
+    audio: { prompt: "", parameters: {}, quantity: 1, sourceFields: {}, unassigned: [] },
   });
-  const [library, setLibrary] = useState({ image: [], video: [] });
-  const [templates, setTemplates] = useState({ text: [], image: [], video: [] });
+  const [library, setLibrary] = useState({ image: [], video: [], audio: [] });
+  const [templates, setTemplates] = useState({ text: [], image: [], video: [], audio: [] });
 
   async function loadModels(type) {
     setModelLoading((current) => ({ ...current, [type]: true }));
@@ -1651,7 +1665,7 @@ function Workspace() {
       setLibrary((current) => ({ ...current, [type]: data.results }));
       return;
     }
-    await Promise.all(["image", "video"].map((item) => reloadLibrary(item)));
+    await Promise.all(["image", "video", "audio"].map((item) => reloadLibrary(item)));
   }
 
   async function reloadTemplates(type) {
@@ -1661,6 +1675,20 @@ function Workspace() {
       return;
     }
     await Promise.all(tabs.map((item) => reloadTemplates(item)));
+  }
+
+  function addBatch(type, batch) {
+    setBatches((current) => {
+      const reconciled = reconcileBatchResults(
+        {
+          batches: current[type] ?? [],
+          pendingResults: pendingResultEvents.current,
+        },
+        { kind: "batch", batch },
+      );
+      pendingResultEvents.current = reconciled.pendingResults;
+      return { ...current, [type]: reconciled.batches };
+    });
   }
 
   useEffect(() => {
@@ -1680,21 +1708,28 @@ function Workspace() {
   useEffect(() => {
     if (!preferencesLoaded) return;
     for (const type of tabs) loadModels(type);
-  }, [preferencesLoaded, preferences.favorites.image.join(","), preferences.favorites.video.join(",")]);
+  }, [
+    preferencesLoaded,
+    preferences.favorites.image.join(","),
+    preferences.favorites.video.join(","),
+    preferences.favorites.audio.join(","),
+  ]);
 
   useEffect(() => {
     const events = new EventSource("/api/events");
     events.addEventListener("result", (event) => {
       const result = JSON.parse(event.data);
-      setBatches((current) => ({
-        ...current,
-        [result.type]: current[result.type].map((batch) => ({
-          ...batch,
-          ...(result.batchId === batch.id &&
-            result.sourceFields && { sourceFields: result.sourceFields }),
-          results: batch.results.map((item) => (item.id === result.id ? result : item)),
-        })),
-      }));
+      setBatches((current) => {
+        const reconciled = reconcileBatchResults(
+          {
+            batches: current[result.type] ?? [],
+            pendingResults: pendingResultEvents.current,
+          },
+          { kind: "result", result },
+        );
+        pendingResultEvents.current = reconciled.pendingResults;
+        return { ...current, [result.type]: reconciled.batches };
+      });
       if (resultRefreshesAccount(result)) void refreshAccount();
     });
     return () => events.close();
@@ -1706,7 +1741,7 @@ function Workspace() {
       <header class="workspace-header">
         <div>
           <h1>Generation Workspace</h1>
-          <small>FAL-powered Chat, Image, and Video</small>
+          <small>FAL-powered Chat, Image, Video, and Audio</small>
           {!readiness?.generation.ready && <ErrorNotice error={readiness?.generation.message} />}
         </div>
         <label class="concurrency">
@@ -1758,6 +1793,7 @@ function Workspace() {
           <>
             <MediaWorkspace
               account={account}
+              addBatch={addBatch}
               batches={batches[active]}
               composer={mediaComposers[active]}
               error={modelErrors[active]}

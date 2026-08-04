@@ -1,22 +1,26 @@
 export function createWorkPool({ concurrency = 2, worker }) {
-  const pending = { image: [], video: [] };
+  const types = ["image", "video", "audio"];
+  const pending = Object.fromEntries(types.map((type) => [type, []]));
   const active = new Map();
   let limit = concurrency;
-  let nextType = "image";
+  let nextTypeIndex = 0;
   let stopped = false;
   const idleWaiters = [];
 
   function resolveIdle() {
-    if (active.size || pending.image.length || pending.video.length) return;
+    if (active.size || types.some((type) => pending[type].length)) return;
     for (const resolve of idleWaiters.splice(0)) resolve();
   }
 
   function takeNext() {
-    const other = nextType === "image" ? "video" : "image";
-    const type = pending[nextType].length ? nextType : pending[other].length ? other : "";
-    if (!type) return null;
-    nextType = type === "image" ? "video" : "image";
-    return pending[type].shift();
+    for (let offset = 0; offset < types.length; offset += 1) {
+      const index = (nextTypeIndex + offset) % types.length;
+      const type = types[index];
+      if (!pending[type].length) continue;
+      nextTypeIndex = (index + 1) % types.length;
+      return pending[type].shift();
+    }
+    return null;
   }
 
   function pump() {
@@ -38,7 +42,7 @@ export function createWorkPool({ concurrency = 2, worker }) {
       queueMicrotask(pump);
     },
     cancel(id) {
-      for (const type of ["image", "video"]) {
+      for (const type of types) {
         const index = pending[type].findIndex((item) => item.id === id);
         if (index >= 0) return pending[type].splice(index, 1)[0];
       }
@@ -50,12 +54,12 @@ export function createWorkPool({ concurrency = 2, worker }) {
     },
     stop() {
       stopped = true;
-      const queued = [...pending.image.splice(0), ...pending.video.splice(0)];
+      const queued = types.flatMap((type) => pending[type].splice(0));
       resolveIdle();
       return { active: [...active.values()], queued };
     },
     waitForIdle() {
-      if (!active.size && !pending.image.length && !pending.video.length) return Promise.resolve();
+      if (!active.size && !types.some((type) => pending[type].length)) return Promise.resolve();
       return new Promise((resolve) => idleWaiters.push(resolve));
     },
   };

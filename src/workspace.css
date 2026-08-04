@@ -524,6 +524,12 @@ body {
   width: 100%;
 }
 
+.result-card audio,
+.library-grid audio {
+  margin-block: 1rem;
+  width: 100%;
+}
+
 .result-card footer {
   flex-wrap: wrap;
   margin-top: auto;
