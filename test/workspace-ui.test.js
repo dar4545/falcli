@@ -7,7 +7,25 @@ import {
   modelCatalogState,
   modelMatchesSearch,
   parameterValueIsValid,
+  resultRefreshesAccount,
 } from "../src/workspace-ui.js";
+
+test("only a returned FAL generation refreshes the account balance", () => {
+  assert.equal(resultRefreshesAccount({ state: "completed" }), true);
+  for (const state of [
+    "queued",
+    "submitting",
+    "submitted",
+    "remote-queued",
+    "running",
+    "failed",
+    "cancelled",
+    "kept",
+    "discarded",
+  ]) {
+    assert.equal(resultRefreshesAccount({ state }), false, state);
+  }
+});
 
 test("model catalog state distinguishes cold loading from an empty catalog", () => {
   assert.deepEqual(

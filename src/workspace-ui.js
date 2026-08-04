@@ -37,6 +37,10 @@ export function modelCatalogState({ error, loading, models }) {
   };
 }
 
+export function resultRefreshesAccount(result) {
+  return result?.state === "completed";
+}
+
 export function parameterValueIsValid(field, value) {
   if (value === undefined || value === null || value === "") return !field.required;
   if (field.options) return field.options.some((option) => Object.is(option, value));
