@@ -370,6 +370,80 @@ body {
   margin-bottom: 0;
 }
 
+.parameter-grid > :is(.parameter-group, .parameter-list) {
+  grid-column: 1 / -1;
+}
+
+.parameter-group,
+.parameter-list {
+  border: 1px solid var(--pico-muted-border-color);
+  border-radius: var(--pico-border-radius);
+  min-width: 0;
+  padding: .55rem .65rem .65rem;
+}
+
+.parameter-group > legend,
+.parameter-list > legend {
+  max-width: 100%;
+  padding: 0 .3rem;
+}
+
+.parameter-group > legend .parameter-label,
+.parameter-list > legend .parameter-label {
+  margin-bottom: 0;
+}
+
+.parameter-group-grid {
+  display: grid;
+  gap: .65rem .85rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.parameter-group-grid > :is(.parameter-group, .parameter-list) {
+  grid-column: 1 / -1;
+}
+
+.parameter-value-mode {
+  margin-bottom: .65rem;
+}
+
+.parameter-list-content {
+  display: grid;
+  gap: .55rem;
+}
+
+.parameter-list-item {
+  align-items: end;
+  background: color-mix(in srgb, var(--pico-card-background-color) 75%, transparent);
+  border: 1px solid var(--pico-muted-border-color);
+  border-radius: var(--pico-border-radius);
+  display: grid;
+  gap: .5rem;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: .55rem;
+}
+
+.parameter-list-item > :is(.parameter-group, .parameter-list) {
+  border: 0;
+  padding: 0;
+}
+
+.parameter-remove,
+.parameter-add {
+  font-size: .82rem;
+  margin: 0;
+  padding: .45rem .65rem;
+  width: auto;
+}
+
+.parameter-add {
+  justify-self: start;
+}
+
+.parameter-list-bounds {
+  color: var(--pico-muted-color);
+}
+
 .parameter-label {
   align-items: center;
   display: flex;
@@ -743,6 +817,12 @@ textarea:disabled {
 }
 
 @media (max-width: 560px) {
+  .parameter-grid,
+  .parameter-group-grid,
+  .parameter-list-item {
+    grid-template-columns: 1fr;
+  }
+
   .inline-controls,
   .model-row,
   .review-bar {

@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   generationTabs,
   generationIssues,
+  initialParametersForModel,
   mediaAlt,
   mediaPreviewTag,
   modelCatalogState,
@@ -11,6 +12,7 @@ import {
   parameterValueIsValid,
   reconcileBatchResults,
   resultRefreshesAccount,
+  updateParameterContainerValue,
 } from "../src/workspace-ui.js";
 
 test("workspace offers Audio as a generation tab", () => {
@@ -242,6 +244,167 @@ test("generation validation follows required and bounded model parameters", () =
       visibleFileFields: [],
     }),
     [],
+  );
+});
+
+test("nested schema controls initialize leaf and explicit parent defaults without flattening", () => {
+  const model = {
+    parameterFields: [
+      {
+        name: "voice_setting",
+        type: "object",
+        control: "group",
+        fields: [
+          { name: "voice_id", type: "string", control: "text", default: "Wise_Woman" },
+          { name: "speed", type: "number", control: "number", default: 1 },
+          { name: "english_normalization", type: "boolean", control: "boolean", default: false },
+        ],
+      },
+      {
+        name: "normalization_setting",
+        type: "object",
+        control: "group",
+        default: { enabled: true, target_loudness: -18 },
+        fields: [
+          { name: "enabled", type: "boolean", control: "boolean", default: false },
+          { name: "target_loudness", type: "number", control: "number", default: -20 },
+        ],
+      },
+    ],
+  };
+
+  assert.deepEqual(initialParametersForModel(model), {
+    voice_setting: {
+      voice_id: "Wise_Woman",
+      speed: 1,
+      english_normalization: false,
+    },
+    normalization_setting: { enabled: true, target_loudness: -18 },
+  });
+});
+
+test("nested schema validation follows child requiredness, constraints, arrays, and nullability", () => {
+  const voiceSetting = {
+    name: "voice_setting",
+    required: true,
+    type: "object",
+    control: "group",
+    fields: [
+      { name: "voice_id", required: true, type: "string", control: "text", minLength: 1 },
+      { name: "speed", required: false, type: "number", control: "number", minimum: 0.5, maximum: 2 },
+    ],
+  };
+  const speakers = {
+    name: "speakers",
+    required: false,
+    type: "array",
+    control: "list",
+    minItems: 2,
+    maxItems: 10,
+    item: {
+      name: "item",
+      required: true,
+      type: "object",
+      control: "group",
+      fields: [
+        { name: "voice", required: true, type: "string", control: "text" },
+        { name: "speaker_id", required: true, type: "string", control: "text" },
+      ],
+    },
+  };
+  const emotion = {
+    name: "emotion",
+    required: false,
+    nullable: true,
+    type: "string",
+    control: "select",
+    options: ["happy", "neutral"],
+  };
+
+  assert.equal(parameterValueIsValid(voiceSetting, { speed: 1 }), false);
+  assert.equal(parameterValueIsValid(voiceSetting, { voice_id: "Wise", speed: 3 }), false);
+  assert.equal(parameterValueIsValid(voiceSetting, { voice_id: "Wise", speed: 1 }), true);
+  assert.equal(parameterValueIsValid(speakers, [{ voice: "Kore", speaker_id: "Host" }]), false);
+  assert.equal(
+    parameterValueIsValid(speakers, [
+      { voice: "Kore", speaker_id: "Host" },
+      { voice: "Puck" },
+    ]),
+    false,
+  );
+  assert.equal(
+    parameterValueIsValid(speakers, [
+      { voice: "Kore", speaker_id: "Host" },
+      { voice: "Puck", speaker_id: "Guest" },
+    ]),
+    true,
+  );
+  assert.equal(parameterValueIsValid(emotion, null), true);
+  assert.equal(parameterValueIsValid({ ...emotion, nullable: false }, null), false);
+});
+
+test("generation validation accepts explicit null only for nullable parameters", () => {
+  const selectedModel = {
+    id: "fal-ai/nullable",
+    parameterFields: [
+      {
+        name: "normalization_setting",
+        label: "Normalization setting",
+        required: true,
+        nullable: true,
+        type: "object",
+        control: "group",
+        fields: [],
+      },
+    ],
+  };
+  const input = {
+    composer: {
+      parameters: { normalization_setting: null },
+      prompt: "",
+      quantity: 1,
+      sourceFields: {},
+    },
+    selectedModel,
+    selectedModelId: selectedModel.id,
+    visibleFileFields: [],
+  };
+
+  assert.deepEqual(generationIssues(input), []);
+  assert.deepEqual(
+    generationIssues({
+      ...input,
+      selectedModel: {
+        ...selectedModel,
+        parameterFields: [
+          { ...selectedModel.parameterFields[0], nullable: false },
+        ],
+      },
+    }),
+    ["enter a valid Normalization setting"],
+  );
+});
+
+test("recursive parameter edits preserve typed nested objects and list items", () => {
+  const speaker = updateParameterContainerValue(undefined, "name", "Narrator");
+  const completedSpeaker = updateParameterContainerValue(
+    speaker,
+    "voice_id",
+    "Wise_Woman",
+  );
+  const speakers = updateParameterContainerValue([], 0, completedSpeaker);
+  const parameters = updateParameterContainerValue(undefined, "speakers", speakers);
+
+  assert.deepEqual(parameters, {
+    speakers: [{ name: "Narrator", voice_id: "Wise_Woman" }],
+  });
+  assert.deepEqual(
+    updateParameterContainerValue(completedSpeaker, "name", undefined),
+    { voice_id: "Wise_Woman" },
+  );
+  assert.deepEqual(
+    updateParameterContainerValue(["first", "second"], 1, undefined),
+    ["first", undefined],
   );
 });
 

@@ -241,6 +241,7 @@ test("Audio catalog configures Text-to-Speech and Speech-to-Speech models from t
         type: "string",
         control: "select",
         options: ["English (US)", "Japanese (Japan)"],
+        nullable: true,
       },
       {
         name: "speakers",
@@ -248,9 +249,36 @@ test("Audio catalog configures Text-to-Speech and Speech-to-Speech models from t
         description: "",
         required: false,
         type: "array",
-        control: "json",
+        control: "list",
         minItems: 2,
         maxItems: 10,
+        nullable: true,
+        item: {
+          name: "item",
+          label: "Item",
+          description: "",
+          required: true,
+          type: "object",
+          control: "group",
+          fields: [
+            {
+              name: "voice",
+              label: "Voice",
+              description: "",
+              required: true,
+              type: "string",
+              control: "text",
+            },
+            {
+              name: "speaker_id",
+              label: "Speaker id",
+              description: "",
+              required: true,
+              type: "string",
+              control: "text",
+            },
+          ],
+        },
       },
       {
         name: "temperature",
@@ -273,6 +301,443 @@ test("Audio catalog configures Text-to-Speech and Speech-to-Speech models from t
         options: ["wav", "mp3", "ogg_opus"],
         default: "mp3",
       },
+    ],
+  );
+});
+
+test("MiniMax Speech 2.8 HD exposes nested voice and audio settings as fine-grained controls", async (t) => {
+  const { address } = await start(t, {
+    async listFalModels() {
+      return {
+        models: [
+          {
+            endpoint_id: "fal-ai/minimax/speech-2.8-hd",
+            catalogCategories: ["text-to-speech"],
+            metadata: { display_name: "MiniMax Speech 2.8 HD" },
+            openapi: {
+              components: {
+                schemas: {
+                  Input: {
+                    type: "object",
+                    required: ["prompt"],
+                    "x-fal-order-properties": [
+                      "prompt",
+                      "voice_setting",
+                      "audio_setting",
+                      "language_boost",
+                      "output_format",
+                      "pronunciation_dict",
+                      "normalization_setting",
+                      "voice_modify",
+                    ],
+                    properties: {
+                      prompt: { type: "string", minLength: 1, maxLength: 10_000 },
+                      voice_setting: {
+                        $ref: "#/components/schemas/VoiceSetting",
+                        default: {
+                          voice_id: "Wise_Woman",
+                          pitch: 0,
+                          speed: 1,
+                          english_normalization: false,
+                          vol: 1,
+                        },
+                      },
+                      audio_setting: { $ref: "#/components/schemas/AudioSetting" },
+                      language_boost: {
+                        anyOf: [
+                          {
+                            type: "string",
+                            enum: [
+                              "Chinese",
+                              "Chinese,Yue",
+                              "English",
+                              "Arabic",
+                              "Russian",
+                              "Spanish",
+                              "French",
+                              "Portuguese",
+                              "German",
+                              "Turkish",
+                              "Dutch",
+                              "Ukrainian",
+                              "Vietnamese",
+                              "Indonesian",
+                              "Japanese",
+                              "Italian",
+                              "Korean",
+                              "Thai",
+                              "Polish",
+                              "Romanian",
+                              "Greek",
+                              "Czech",
+                              "Finnish",
+                              "Hindi",
+                              "Bulgarian",
+                              "Danish",
+                              "Hebrew",
+                              "Malay",
+                              "Slovak",
+                              "Swedish",
+                              "Croatian",
+                              "Hungarian",
+                              "Norwegian",
+                              "Slovenian",
+                              "Catalan",
+                              "Nynorsk",
+                              "Afrikaans",
+                              "auto",
+                            ],
+                          },
+                          { type: "null" },
+                        ],
+                      },
+                      output_format: {
+                        type: "string",
+                        enum: ["url", "hex"],
+                        default: "hex",
+                      },
+                      pronunciation_dict: {
+                        anyOf: [
+                          { $ref: "#/components/schemas/PronunciationDict" },
+                          { type: "null" },
+                        ],
+                      },
+                      normalization_setting: {
+                        $ref: "#/components/schemas/LoudnessNormalizationSetting",
+                      },
+                      voice_modify: {
+                        anyOf: [
+                          { $ref: "#/components/schemas/VoiceModify" },
+                          { type: "null" },
+                        ],
+                      },
+                    },
+                  },
+                  VoiceSetting: {
+                    type: "object",
+                    "x-fal-order-properties": [
+                      "voice_id",
+                      "speed",
+                      "vol",
+                      "pitch",
+                      "emotion",
+                      "english_normalization",
+                    ],
+                    properties: {
+                      voice_id: { type: "string", default: "Wise_Woman" },
+                      speed: { type: "number", minimum: 0.5, maximum: 2, default: 1 },
+                      vol: { type: "number", minimum: 0.01, maximum: 10, default: 1 },
+                      pitch: { type: "integer", minimum: -12, maximum: 12, default: 0 },
+                      emotion: {
+                        anyOf: [
+                          {
+                            type: "string",
+                            enum: [
+                              "happy",
+                              "sad",
+                              "angry",
+                              "fearful",
+                              "disgusted",
+                              "surprised",
+                              "neutral",
+                            ],
+                          },
+                          { type: "null" },
+                        ],
+                      },
+                      english_normalization: { type: "boolean", default: false },
+                    },
+                  },
+                  AudioSetting: {
+                    type: "object",
+                    "x-fal-order-properties": ["sample_rate", "bitrate", "format", "channel"],
+                    properties: {
+                      sample_rate: {
+                        type: "integer",
+                        enum: [8000, 16000, 22050, 24000, 32000, 44100],
+                        default: 32000,
+                      },
+                      bitrate: {
+                        type: "integer",
+                        enum: [32000, 64000, 128000, 256000],
+                        default: 128000,
+                      },
+                      format: {
+                        type: "string",
+                        enum: ["mp3", "pcm", "flac"],
+                        default: "mp3",
+                      },
+                      channel: {
+                        type: "integer",
+                        enum: [1, 2],
+                        default: 1,
+                      },
+                    },
+                  },
+                  PronunciationDict: {
+                    type: "object",
+                    "x-fal-order-properties": ["tone_list"],
+                    properties: {
+                      tone_list: { type: "array", items: { type: "string" } },
+                    },
+                  },
+                  LoudnessNormalizationSetting: {
+                    type: "object",
+                    "x-fal-order-properties": [
+                      "enabled",
+                      "target_loudness",
+                      "target_range",
+                      "target_peak",
+                    ],
+                    properties: {
+                      enabled: { type: "boolean", default: true },
+                      target_loudness: {
+                        type: "number",
+                        minimum: -70,
+                        maximum: -10,
+                        default: -18,
+                      },
+                      target_range: {
+                        type: "number",
+                        minimum: 0,
+                        maximum: 20,
+                        default: 8,
+                      },
+                      target_peak: {
+                        type: "number",
+                        minimum: -3,
+                        maximum: 0,
+                        default: -0.5,
+                      },
+                    },
+                  },
+                  VoiceModify: {
+                    type: "object",
+                    "x-fal-order-properties": ["pitch", "intensity", "timbre"],
+                    properties: {
+                      pitch: {
+                        type: "integer",
+                        minimum: -100,
+                        maximum: 100,
+                        default: 0,
+                      },
+                      intensity: {
+                        type: "integer",
+                        minimum: -100,
+                        maximum: 100,
+                        default: 0,
+                      },
+                      timbre: {
+                        type: "integer",
+                        minimum: -100,
+                        maximum: 100,
+                        default: 0,
+                      },
+                    },
+                  },
+                },
+              },
+              paths: {
+                "/fal-ai/minimax/speech-2.8-hd": {
+                  post: {
+                    requestBody: {
+                      content: {
+                        "application/json": {
+                          schema: { $ref: "#/components/schemas/Input" },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        ],
+      };
+    },
+  });
+
+  const catalog = await fetch(`${address}/api/models/audio`).then((response) => response.json());
+  const model = catalog.models.find(
+    (candidate) => candidate.id === "fal-ai/minimax/speech-2.8-hd",
+  );
+  const parameter = (name) => model.parameterFields.find((field) => field.name === name);
+  const child = (field, name) => field.fields.find((candidate) => candidate.name === name);
+  const voiceSetting = parameter("voice_setting");
+  const audioSetting = parameter("audio_setting");
+
+  assert.deepEqual(model.prompt, {
+    name: "prompt",
+    label: "Prompt",
+    description: "",
+    required: true,
+    minLength: 1,
+    maxLength: 10_000,
+  });
+  assert.deepEqual(model.parameterFields.map((field) => field.name), [
+    "voice_setting",
+    "audio_setting",
+    "language_boost",
+    "output_format",
+    "pronunciation_dict",
+    "normalization_setting",
+    "voice_modify",
+  ]);
+
+  assert.equal(voiceSetting.control, "group");
+  assert.deepEqual(voiceSetting.default, {
+    voice_id: "Wise_Woman",
+    pitch: 0,
+    speed: 1,
+    english_normalization: false,
+    vol: 1,
+  });
+  assert.deepEqual(
+    voiceSetting.fields.map(({ name, control }) => ({ name, control })),
+    [
+      { name: "voice_id", control: "text" },
+      { name: "speed", control: "number" },
+      { name: "vol", control: "number" },
+      { name: "pitch", control: "number" },
+      { name: "emotion", control: "select" },
+      { name: "english_normalization", control: "boolean" },
+    ],
+  );
+  assert.deepEqual(
+    {
+      minimum: child(voiceSetting, "vol").minimum,
+      maximum: child(voiceSetting, "vol").maximum,
+      default: child(voiceSetting, "vol").default,
+    },
+    { minimum: 0.01, maximum: 10, default: 1 },
+  );
+  assert.deepEqual(
+    {
+      type: child(voiceSetting, "pitch").type,
+      minimum: child(voiceSetting, "pitch").minimum,
+      maximum: child(voiceSetting, "pitch").maximum,
+      default: child(voiceSetting, "pitch").default,
+    },
+    { type: "integer", minimum: -12, maximum: 12, default: 0 },
+  );
+  assert.deepEqual(
+    {
+      nullable: child(voiceSetting, "emotion").nullable,
+      options: child(voiceSetting, "emotion").options,
+    },
+    {
+      nullable: true,
+      options: ["happy", "sad", "angry", "fearful", "disgusted", "surprised", "neutral"],
+    },
+  );
+  assert.equal(child(voiceSetting, "english_normalization").default, false);
+
+  assert.equal(audioSetting.control, "group");
+  assert.deepEqual(audioSetting.default, {
+    sample_rate: 32000,
+    bitrate: 128000,
+    format: "mp3",
+    channel: 1,
+  });
+  assert.deepEqual(
+    audioSetting.fields.map(({ name, control }) => ({ name, control })),
+    [
+      { name: "sample_rate", control: "select" },
+      { name: "bitrate", control: "select" },
+      { name: "format", control: "select" },
+      { name: "channel", control: "select" },
+    ],
+  );
+  assert.deepEqual(
+    {
+      type: child(audioSetting, "sample_rate").type,
+      options: child(audioSetting, "sample_rate").options,
+      default: child(audioSetting, "sample_rate").default,
+    },
+    {
+      type: "number",
+      options: [8000, 16000, 22050, 24000, 32000, 44100],
+      default: 32000,
+    },
+  );
+  assert.deepEqual(
+    {
+      type: child(audioSetting, "bitrate").type,
+      options: child(audioSetting, "bitrate").options,
+      default: child(audioSetting, "bitrate").default,
+    },
+    { type: "number", options: [32000, 64000, 128000, 256000], default: 128000 },
+  );
+  assert.deepEqual(
+    {
+      type: child(audioSetting, "channel").type,
+      options: child(audioSetting, "channel").options,
+      default: child(audioSetting, "channel").default,
+    },
+    { type: "number", options: [1, 2], default: 1 },
+  );
+
+  const language = parameter("language_boost");
+  assert.equal(language.control, "select");
+  assert.equal(language.nullable, true);
+  assert.deepEqual(language.options.slice(0, 4), ["Chinese", "Chinese,Yue", "English", "Arabic"]);
+  assert.equal(language.options.at(-1), "auto");
+  assert.deepEqual(
+    {
+      options: parameter("output_format").options,
+      default: parameter("output_format").default,
+    },
+    { options: ["url", "hex"], default: "hex" },
+  );
+
+  const pronunciation = parameter("pronunciation_dict");
+  const tones = child(pronunciation, "tone_list");
+  assert.equal(pronunciation.control, "group");
+  assert.equal(pronunciation.nullable, true);
+  assert.equal(tones.control, "list");
+  assert.deepEqual(
+    { type: tones.item.type, control: tones.item.control },
+    { type: "string", control: "text" },
+  );
+
+  const normalization = parameter("normalization_setting");
+  assert.equal(normalization.control, "group");
+  assert.deepEqual(normalization.default, {
+    enabled: true,
+    target_loudness: -18,
+    target_range: 8,
+    target_peak: -0.5,
+  });
+  assert.deepEqual(
+    ["target_loudness", "target_range", "target_peak"].map((name) => ({
+      name,
+      minimum: child(normalization, name).minimum,
+      maximum: child(normalization, name).maximum,
+      default: child(normalization, name).default,
+    })),
+    [
+      { name: "target_loudness", minimum: -70, maximum: -10, default: -18 },
+      { name: "target_range", minimum: 0, maximum: 20, default: 8 },
+      { name: "target_peak", minimum: -3, maximum: 0, default: -0.5 },
+    ],
+  );
+
+  const voiceModify = parameter("voice_modify");
+  assert.equal(voiceModify.control, "group");
+  assert.equal(voiceModify.nullable, true);
+  assert.deepEqual(voiceModify.default, { pitch: 0, intensity: 0, timbre: 0 });
+  assert.deepEqual(
+    voiceModify.fields.map(({ name, type, minimum, maximum, default: defaultValue }) => ({
+      name,
+      type,
+      minimum,
+      maximum,
+      default: defaultValue,
+    })),
+    [
+      { name: "pitch", type: "integer", minimum: -100, maximum: 100, default: 0 },
+      { name: "intensity", type: "integer", minimum: -100, maximum: 100, default: 0 },
+      { name: "timbre", type: "integer", minimum: -100, maximum: 100, default: 0 },
     ],
   );
 });

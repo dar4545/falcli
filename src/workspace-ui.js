@@ -89,8 +89,63 @@ export function resultRefreshesAccount(result) {
   return result?.state === "completed";
 }
 
+function cloneParameterValue(value) {
+  if (Array.isArray(value)) return value.map(cloneParameterValue);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([name, child]) => [name, cloneParameterValue(child)]),
+    );
+  }
+  return value;
+}
+
+export function defaultValueForParameter(field) {
+  if (Object.hasOwn(field, "default")) {
+    return { present: true, value: cloneParameterValue(field.default) };
+  }
+  if (field.control === "group") {
+    const entries = (field.fields ?? []).flatMap((child) => {
+      const nested = defaultValueForParameter(child);
+      return nested.present ? [[child.name, nested.value]] : [];
+    });
+    if (entries.length) return { present: true, value: Object.fromEntries(entries) };
+  }
+  return { present: false, value: undefined };
+}
+
+export function initialParametersForModel(model, current = {}) {
+  return Object.fromEntries(
+    (model?.parameterFields ?? []).flatMap((field) => {
+      if (
+        Object.hasOwn(current, field.name) &&
+        parameterValueIsValid({ ...field, required: false }, current[field.name])
+      ) {
+        return [[field.name, cloneParameterValue(current[field.name])]];
+      }
+      const fallback = defaultValueForParameter(field);
+      return fallback.present ? [[field.name, fallback.value]] : [];
+    }),
+  );
+}
+
+export function updateParameterContainerValue(container, key, value) {
+  if (typeof key === "number") {
+    const next = Array.isArray(container) ? [...container] : [];
+    next[key] = value;
+    return next;
+  }
+  const next =
+    container && typeof container === "object" && !Array.isArray(container)
+      ? { ...container }
+      : {};
+  if (value === undefined) delete next[key];
+  else next[key] = value;
+  return next;
+}
+
 export function parameterValueIsValid(field, value) {
-  if (value === undefined || value === null || value === "") return !field.required;
+  if (value === undefined || value === "") return !field.required;
+  if (value === null) return Boolean(field.nullable);
   if (field.options) return field.options.some((option) => Object.is(option, value));
   if (field.type === "boolean") return typeof value === "boolean";
   if (field.type === "string") {
@@ -108,11 +163,22 @@ export function parameterValueIsValid(field, value) {
     return (
       Array.isArray(value) &&
       (!Number.isFinite(field.minItems) || value.length >= field.minItems) &&
-      (!Number.isFinite(field.maxItems) || value.length <= field.maxItems)
+      (!Number.isFinite(field.maxItems) || value.length <= field.maxItems) &&
+      (!field.item ||
+        value.every((item) =>
+          parameterValueIsValid({ ...field.item, required: true }, item),
+        ))
     );
   }
   if (field.type === "object") {
-    return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+    return (
+      Boolean(value) &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      (field.fields ?? []).every((child) =>
+        parameterValueIsValid(child, value[child.name]),
+      )
+    );
   }
   if (field.type === "json") return true;
   if (!["integer", "number"].includes(field.type)) return false;
@@ -155,11 +221,10 @@ export function generationIssues({
   }
   for (const field of selectedModel?.parameterFields ?? []) {
     const value = composer.parameters?.[field.name];
-    if (field.required && (value === undefined || value === null || value === "")) {
-      issues.push(`set ${field.label || field.name}`);
+    if (value === undefined || value === "") {
+      if (field.required) issues.push(`set ${field.label || field.name}`);
       continue;
     }
-    if (value === undefined || value === null || value === "") continue;
     if (!parameterValueIsValid(field, value)) {
       issues.push(`enter a valid ${field.label || field.name}`);
     }

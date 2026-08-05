@@ -127,10 +127,12 @@ function labelFor(name, schema) {
 
 function resolveSchema(document, schema) {
   if (!schema?.$ref) return schema;
-  return schema.$ref
+  const referenced = schema.$ref
     .replace(/^#\//, "")
     .split("/")
     .reduce((value, key) => value?.[key], document);
+  const { $ref, ...siblings } = schema;
+  return { ...(referenced ?? {}), ...siblings };
 }
 
 function inputSchema(model) {
@@ -139,13 +141,18 @@ function inputSchema(model) {
   for (const pathItem of Object.values(document.paths ?? {})) {
     for (const operation of Object.values(pathItem ?? {})) {
       const schema = operation?.requestBody?.content?.["application/json"]?.schema;
-      if (schema) return resolveSchema(document, schema);
+      if (schema) return concreteSchema(document, schema);
     }
   }
   return (
-    document.components?.schemas?.Input ??
-    Object.entries(document.components?.schemas ?? {}).find(([name]) => name.endsWith("Input"))?.[1] ??
-    null
+    concreteSchema(
+      document,
+      document.components?.schemas?.Input ??
+        Object.entries(document.components?.schemas ?? {}).find(([name]) =>
+          name.endsWith("Input"),
+        )?.[1] ??
+        null,
+    )
   );
 }
 
@@ -153,26 +160,127 @@ function schemaDocument(model) {
   return model.openapi ?? model.openapi_schema ?? model["openapi-3.0"] ?? {};
 }
 
-function concreteSchema(document, schema) {
-  const resolved = resolveSchema(document, schema) ?? {};
+function propertyEntries(schema) {
+  const properties = schema?.properties ?? {};
+  const entries = Object.entries(properties);
+  const preferred = schema?.["x-fal-order-properties"];
+  if (!Array.isArray(preferred)) return entries;
+  const byName = new Map(entries);
+  const ordered = preferred.flatMap((name) => {
+    if (!byName.has(name)) return [];
+    const property = byName.get(name);
+    byName.delete(name);
+    return [[name, property]];
+  });
+  return [...ordered, ...byName.entries()];
+}
+
+/**
+ * @param {Record<string, any>} base
+ * @param {Record<string, any>} override
+ * @returns {Record<string, any>}
+ */
+function mergeSchemas(base = {}, override = {}) {
+  const merged = { ...base, ...override };
+  if (base.properties || override.properties) {
+    const properties = { ...(base.properties ?? {}) };
+    for (const [name, property] of Object.entries(override.properties ?? {})) {
+      properties[name] = Object.hasOwn(properties, name)
+        ? mergeSchemas(properties[name], property)
+        : property;
+    }
+    merged.properties = properties;
+  }
+  if (base.required || override.required) {
+    merged.required = [...new Set([...(base.required ?? []), ...(override.required ?? [])])];
+  }
+  return merged;
+}
+
+/**
+ * @param {Record<string, any>} document
+ * @param {Record<string, any> | null | undefined} schema
+ * @param {Set<string>} resolving
+ * @returns {Record<string, any>}
+ */
+function concreteSchema(document, schema, resolving = new Set()) {
+  if (!schema) return {};
+  let resolved = schema;
+  if (schema.$ref) {
+    if (resolving.has(schema.$ref)) {
+      const { $ref, ...siblings } = schema;
+      return { ...siblings, circular: true };
+    }
+    const nextResolving = new Set(resolving).add(schema.$ref);
+    const referenced = schema.$ref
+      .replace(/^#\//, "")
+      .split("/")
+      .reduce((value, key) => value?.[key], document);
+    const { $ref, ...siblings } = schema;
+    resolved = mergeSchemas(
+      concreteSchema(document, referenced, nextResolving),
+      siblings,
+    );
+  }
   if (Array.isArray(resolved.allOf)) {
-    return resolved.allOf.reduce(
-      (merged, part) => ({ ...merged, ...concreteSchema(document, part) }),
-      { ...resolved, allOf: undefined },
+    const { allOf, ...base } = resolved;
+    return allOf.reduce(
+      (merged, part) => mergeSchemas(merged, concreteSchema(document, part, resolving)),
+      base,
     );
   }
   const variants = resolved.anyOf ?? resolved.oneOf;
-  if (!Array.isArray(variants)) return resolved;
+  if (!Array.isArray(variants)) {
+    if (Array.isArray(resolved.type) && resolved.type.includes("null")) {
+      const concreteTypes = resolved.type.filter((type) => type !== "null");
+      return {
+        ...resolved,
+        type: concreteTypes.length === 1 ? concreteTypes[0] : concreteTypes,
+        nullable: true,
+      };
+    }
+    return resolved;
+  }
   const concrete = variants
-    .map((variant) => resolveSchema(document, variant))
+    .map((variant) => concreteSchema(document, variant, resolving))
     .filter((variant) => variant && variant.type !== "null");
   if (!concrete.length) return resolved;
-  const merged = { ...resolved, ...concrete[0] };
-  const options = concrete.flatMap((variant) => variant.enum ?? []);
-  if (options.length) merged.enum = [...new Set(options)];
-  delete merged.anyOf;
-  delete merged.oneOf;
-  return merged;
+  const { anyOf, oneOf, ...base } = resolved;
+  const nullable = concrete.length !== variants.length;
+  const merged = mergeSchemas(base, concrete[0]);
+  if (concrete.length === 1) {
+    return { ...merged, ...(nullable && { nullable: true }) };
+  }
+  const optionGroups = concrete.map((variant) =>
+    Array.isArray(variant.enum)
+      ? variant.enum
+      : Object.hasOwn(variant, "const")
+        ? [variant.const]
+        : null,
+  );
+  const optionTypes = optionGroups.flatMap((options) =>
+    options?.map((option) => (option === null ? "null" : typeof option)) ?? [],
+  );
+  const compatibleScalarEnums =
+    optionGroups.every(
+      (options) =>
+        options?.length &&
+        options.every(
+          (option) =>
+            option !== null && ["string", "number", "boolean"].includes(typeof option),
+        ),
+    ) && optionTypes.every((type) => type === optionTypes[0]);
+  if (compatibleScalarEnums) {
+    delete merged.const;
+    merged.enum = [...new Set(optionGroups.flat())];
+    return { ...merged, ...(nullable && { nullable: true }) };
+  }
+  return {
+    ...base,
+    type: "union",
+    variants: concrete,
+    ...(nullable && { nullable: true }),
+  };
 }
 
 function fileField(name, schema, required) {
@@ -203,8 +311,27 @@ function fileField(name, schema, required) {
   };
 }
 
-function parameterField(name, unresolvedSchema, required, document) {
-  const schema = concreteSchema(document, unresolvedSchema);
+function parameterField(name, unresolvedSchema, required, document, ancestorRefs = new Set()) {
+  const reference = unresolvedSchema?.$ref;
+  const circular = reference && ancestorRefs.has(reference);
+  const schema = circular
+    ? (() => {
+        const resolved = resolveSchema(document, unresolvedSchema) ?? {};
+        const {
+          properties,
+          items,
+          allOf,
+          anyOf,
+          oneOf,
+          $ref,
+          ...annotations
+        } = resolved;
+        return { ...annotations, type: "json", circular: true };
+      })()
+    : concreteSchema(document, unresolvedSchema);
+  const descendantRefs = reference
+    ? new Set(ancestorRefs).add(reference)
+    : ancestorRefs;
   const options = Array.isArray(schema.enum)
     ? schema.enum
     : Object.hasOwn(schema, "const")
@@ -228,14 +355,45 @@ function parameterField(name, unresolvedSchema, required, document) {
       : schema?.items
         ? "array"
         : "json");
+  const objectFields =
+    inferredType === "object" && schema.properties
+      ? propertyEntries(schema).map(([childName, childSchema]) =>
+          parameterField(
+            childName,
+            childSchema,
+            new Set(schema.required ?? []).has(childName),
+            document,
+            descendantRefs,
+          ),
+        )
+      : undefined;
+  const itemField =
+    inferredType === "array" && schema.items
+      ? parameterField("item", schema.items, true, document, descendantRefs)
+      : undefined;
+  const nestedDefault = objectFields
+    ? Object.fromEntries(
+        objectFields.flatMap((field) =>
+          Object.hasOwn(field, "default") ? [[field.name, field.default]] : [],
+        ),
+      )
+    : undefined;
+  const hasNestedDefault = nestedDefault && Object.keys(nestedDefault).length > 0;
+  const unsupportedUnion = inferredType === "union";
   return {
     name,
     label: labelFor(name, schema),
     description: schema.description ?? "",
     required,
     type: inferredType,
-    control: options
+    control: unsupportedUnion
+      ? "json"
+      : options
       ? "select"
+      : objectFields
+        ? "group"
+        : itemField
+          ? "list"
       : inferredType === "boolean"
         ? "boolean"
         : inferredType === "string"
@@ -246,6 +404,9 @@ function parameterField(name, unresolvedSchema, required, document) {
     ...(options && { options }),
     ...(Object.hasOwn(schema, "default") && { default: schema.default }),
     ...(Object.hasOwn(schema, "const") && { default: schema.const }),
+    ...(!Object.hasOwn(schema, "default") &&
+      !Object.hasOwn(schema, "const") &&
+      hasNestedDefault && { default: nestedDefault }),
     ...(Number.isFinite(schema.minimum) && { minimum: schema.minimum }),
     ...(Number.isFinite(schema.maximum) && { maximum: schema.maximum }),
     ...(Number.isFinite(schema.multipleOf) && { step: schema.multipleOf }),
@@ -254,6 +415,9 @@ function parameterField(name, unresolvedSchema, required, document) {
     ...(typeof schema.pattern === "string" && { pattern: schema.pattern }),
     ...(Number.isFinite(schema.minItems) && { minItems: schema.minItems }),
     ...(Number.isFinite(schema.maxItems) && { maxItems: schema.maxItems }),
+    ...(schema.nullable && { nullable: true }),
+    ...(objectFields && { fields: objectFields }),
+    ...(itemField && { item: itemField }),
   };
 }
 
@@ -316,12 +480,13 @@ function normalizeFal(payload, favorites, type) {
     }
     const required = new Set(schema.required ?? []);
     const properties = schema.properties ?? {};
-    const fields = Object.entries(properties).flatMap(([name, property]) => {
+    const propertiesInOrder = propertyEntries(schema);
+    const fields = propertiesInOrder.flatMap(([name, property]) => {
       const field = fileField(name, concreteSchema(document, property), required.has(name));
       return field ? [field] : [];
     });
     const fileNames = new Set(fields.map((field) => field.name));
-    const parameterFields = Object.entries(properties).flatMap(([name, property]) => {
+    const parameterFields = propertiesInOrder.flatMap(([name, property]) => {
       if (name === "prompt" || fileNames.has(name)) return [];
       const field = parameterField(name, property, required.has(name), document);
       return field ? [field] : [];

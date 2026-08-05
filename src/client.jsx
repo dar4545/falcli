@@ -7,8 +7,10 @@ import {
 } from "./media-file-selection.js";
 import {
   compactText,
+  defaultValueForParameter,
   generationTabs,
   generationIssues,
+  initialParametersForModel,
   mediaAlt,
   mediaPreviewTag,
   modelCatalogState,
@@ -17,6 +19,7 @@ import {
   parameterValueIsValid,
   reconcileBatchResults,
   resultRefreshesAccount,
+  updateParameterContainerValue,
 } from "./workspace-ui.js";
 import "./workspace.css";
 
@@ -99,43 +102,200 @@ function ErrorNotice({ error }) {
   return error ? <p class="error" role="alert">{error}</p> : null;
 }
 
-function initialParameters(model, current = {}) {
-  return Object.fromEntries(
-    (model?.parameterFields ?? []).flatMap((field) => {
-      if (
-        Object.hasOwn(current, field.name) &&
-        parameterValueIsValid({ ...field, required: false }, current[field.name])
-      ) {
-        return [[field.name, current[field.name]]];
-      }
-      if (Object.hasOwn(field, "default")) return [[field.name, field.default]];
-      return [];
-    }),
+function ParameterFieldLabel({ field, id }) {
+  return (
+    <span class="parameter-label">
+      <span>{field.label}{field.required ? " *" : ""}</span>
+      {field.description && (
+        <span
+          aria-label={field.description}
+          class="parameter-help"
+          id={`${id}-description`}
+          role="img"
+          title={field.description}
+        >
+          ?
+        </span>
+      )}
+    </span>
   );
 }
 
-function ParameterFieldControl({ field, onChange, value }) {
-  const id = `parameter-${field.name}`;
+function NullableParameterMode({ field, id, onChange, value, valueLabel }) {
+  if (!field.nullable) return null;
+  const mode = value === null ? "null" : value === undefined ? "default" : "value";
+  return (
+    <select
+      aria-label={`${field.label} value mode`}
+      class="parameter-value-mode"
+      id={`${id}-mode`}
+      name={`${id}-mode`}
+      onChange={(event) => {
+        const nextMode = event.currentTarget.value;
+        if (nextMode === "null") onChange(null);
+        else if (nextMode === "default") onChange(undefined);
+        else {
+          const fallback = defaultValueForParameter(field);
+          onChange(
+            fallback.present && fallback.value !== null
+              ? fallback.value
+              : field.control === "list"
+                ? []
+                : field.control === "group" || field.control === "json"
+                  ? {}
+                  : field.control === "boolean"
+                    ? false
+                    : field.control === "number"
+                      ? field.minimum ?? 0
+                      : "",
+          );
+        }
+      }}
+      value={mode}
+    >
+      <option disabled={field.required} value="default">Use model default</option>
+      <option value="value">{valueLabel}</option>
+      <option value="null">Set null</option>
+    </select>
+  );
+}
+
+function ParameterFieldControl({ field, onChange, path = field.name, value }) {
+  const id = `parameter-${path.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
   const [jsonText, setJsonText] = useState(
     value === undefined ? "" : JSON.stringify(value, null, 2),
   );
   useEffect(() => {
     setJsonText(value === undefined ? "" : JSON.stringify(value, null, 2));
-  }, [field.name, value]);
+  }, [path, value]);
   const common = {
     "aria-describedby": field.description ? `${id}-description` : undefined,
     id,
     required: field.required,
   };
   let control;
-  if (field.control === "select") {
+  if (field.control === "group") {
+    const groupValue =
+      value && typeof value === "object" && !Array.isArray(value) ? value : {};
     control = (
-      <select {...common} onChange={(event) => onChange(event.currentTarget.value)} value={value ?? ""}>
+      <fieldset class="parameter-field parameter-group">
+        <legend><ParameterFieldLabel field={field} id={id} /></legend>
+        <NullableParameterMode
+          field={field}
+          id={id}
+          onChange={onChange}
+          value={value}
+          valueLabel="Configure object"
+        />
+        {value !== null && (!field.nullable || value !== undefined) && (
+          <div class="parameter-group-grid">
+            {(field.fields ?? []).map((child) => (
+              <ParameterFieldControl
+                field={child}
+                key={child.name}
+                onChange={(childValue) => {
+                  const next = updateParameterContainerValue(
+                    groupValue,
+                    child.name,
+                    childValue,
+                  );
+                  onChange(Object.keys(next).length ? next : undefined);
+                }}
+                path={`${path}.${child.name}`}
+                value={groupValue[child.name]}
+              />
+            ))}
+          </div>
+        )}
+      </fieldset>
+    );
+  } else if (field.control === "list") {
+    const items = Array.isArray(value) ? value : [];
+    control = (
+      <fieldset class="parameter-field parameter-list">
+        <legend><ParameterFieldLabel field={field} id={id} /></legend>
+        <NullableParameterMode
+          field={field}
+          id={id}
+          onChange={onChange}
+          value={value}
+          valueLabel="Edit list"
+        />
+        {value !== null && (!field.nullable || value !== undefined) && (
+          <div class="parameter-list-content">
+            {items.map((item, index) => (
+              <div class="parameter-list-item" key={index}>
+                <ParameterFieldControl
+                  field={{
+                    ...field.item,
+                    label: `${field.item?.label || "Item"} ${index + 1}`,
+                    required: true,
+                  }}
+                  onChange={(itemValue) =>
+                    onChange(
+                      updateParameterContainerValue(items, index, itemValue),
+                    )}
+                  path={`${path}.${index}`}
+                  value={item}
+                />
+                <button
+                  aria-label={`Remove ${field.label} item ${index + 1}`}
+                  class="outline secondary parameter-remove"
+                  onClick={() => onChange(items.filter((_, itemIndex) => itemIndex !== index))}
+                  type="button"
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+            <button
+              class="outline secondary parameter-add"
+              disabled={Number.isFinite(field.maxItems) && items.length >= field.maxItems}
+              onClick={() => {
+                const fallback = defaultValueForParameter(field.item ?? {});
+                const itemValue = fallback.present
+                  ? fallback.value
+                  : field.item?.control === "group"
+                    ? {}
+                    : field.item?.control === "list"
+                      ? []
+                      : undefined;
+                onChange([...items, itemValue]);
+              }}
+              type="button"
+            >
+              Add {field.item?.label?.toLowerCase() || "item"}
+            </button>
+            {(Number.isFinite(field.minItems) || Number.isFinite(field.maxItems)) && (
+              <small class="parameter-list-bounds">
+                {Number.isFinite(field.minItems) ? `Minimum ${field.minItems}` : ""}
+                {Number.isFinite(field.minItems) && Number.isFinite(field.maxItems) ? " · " : ""}
+                {Number.isFinite(field.maxItems) ? `Maximum ${field.maxItems}` : ""}
+              </small>
+            )}
+          </div>
+        )}
+      </fieldset>
+    );
+  } else if (field.control === "select") {
+    const optionIndex = (field.options ?? []).findIndex((option) => Object.is(option, value));
+    control = (
+      <select
+        {...common}
+        onChange={(event) => {
+          const selected = event.currentTarget.value;
+          if (selected === "") onChange(undefined);
+          else if (selected === "null") onChange(null);
+          else onChange(field.options[Number(selected.slice("option:".length))]);
+        }}
+        value={value === null ? "null" : optionIndex < 0 ? "" : `option:${optionIndex}`}
+      >
         <option disabled={field.required} value="">
           {field.required ? "Choose a value" : "Use model default"}
         </option>
-        {field.options.map((option) => (
-          <option value={String(option)}>{String(option)}</option>
+        {field.nullable && <option value="null">Set null</option>}
+        {field.options.map((option, index) => (
+          <option key={index} value={`option:${index}`}>{String(option)}</option>
         ))}
       </select>
     );
@@ -144,12 +304,19 @@ function ParameterFieldControl({ field, onChange, value }) {
       <select
         {...common}
         onChange={(event) =>
-          onChange(event.currentTarget.value === "" ? undefined : event.currentTarget.value === "true")}
-        value={value === undefined ? "" : String(value)}
+          onChange(
+            event.currentTarget.value === ""
+              ? undefined
+              : event.currentTarget.value === "null"
+                ? null
+                : event.currentTarget.value === "true",
+          )}
+        value={value === null ? "null" : value === undefined ? "" : String(value)}
       >
         <option disabled={field.required} value="">
           {field.required ? "Choose a value" : "Use model default"}
         </option>
+        {field.nullable && <option value="null">Set null</option>}
         <option value="true">Yes</option>
         <option value="false">No</option>
       </select>
@@ -204,23 +371,20 @@ function ParameterFieldControl({ field, onChange, value }) {
       />
     );
   }
+  if (["group", "list"].includes(field.control)) return control;
   return (
     <label class="parameter-field" for={id}>
-      <span class="parameter-label">
-        <span>{field.label}{field.required ? " *" : ""}</span>
-        {field.description && (
-          <span
-            aria-label={field.description}
-            class="parameter-help"
-            id={`${id}-description`}
-            role="img"
-            title={field.description}
-          >
-            ?
-          </span>
-        )}
-      </span>
-      {control}
+      <ParameterFieldLabel field={field} id={id} />
+      {field.nullable && !["select", "boolean"].includes(field.control) && (
+        <NullableParameterMode
+          field={field}
+          id={id}
+          onChange={onChange}
+          value={value}
+          valueLabel="Set value"
+        />
+      )}
+      {value !== null && control}
     </label>
   );
 }
@@ -1064,7 +1228,7 @@ function MediaWorkspace({
       setComposer((current) => ({
         ...current,
         prompt: editable.prompt,
-        parameters: initialParameters(
+        parameters: initialParametersForModel(
           models.find((model) => model.id === editable.model),
           editable.parameters,
         ),
@@ -1099,7 +1263,7 @@ function MediaWorkspace({
       }
       return {
         ...current,
-        parameters: initialParameters(model, current.parameters),
+        parameters: initialParametersForModel(model, current.parameters),
         sourceFields,
         unassigned,
       };
@@ -1378,21 +1542,15 @@ function MediaWorkspace({
                 <ParameterFieldControl
                   field={field}
                   onChange={(value) =>
-                    setComposer((current) => {
-                      const parameters = { ...(current.parameters ?? {}) };
-                      if (value === undefined || value === "") delete parameters[field.name];
-                      else if (field.options) {
-                        parameters[field.name] =
-                          field.type === "number" || field.type === "integer"
-                            ? Number(value)
-                            : field.type === "boolean"
-                              ? value === "true"
-                              : value;
-                      } else {
-                        parameters[field.name] = value;
-                      }
-                      return { ...current, parameters };
-                    })}
+                    setComposer((current) => ({
+                      ...current,
+                      parameters: updateParameterContainerValue(
+                        current.parameters,
+                        field.name,
+                        value,
+                      ),
+                    }))
+                  }
                   value={composer.parameters?.[field.name]}
                 />
               ))}

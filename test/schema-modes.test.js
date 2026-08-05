@@ -200,7 +200,7 @@ test("image catalog exposes schema controls and compatible modes", async (t) => 
   );
 });
 
-test("enum options determine the normalized select value type for mixed schemas", async (t) => {
+test("an object-plus-preset enum union keeps every schema branch via JSON fallback", async (t) => {
   const address = await start(t, {
     async listFalModels() {
       return {
@@ -222,6 +222,22 @@ test("enum options determine the normalized select value type for mixed schemas"
               ],
               default: "auto",
             },
+            reversed_image_size: {
+              anyOf: [
+                {
+                  type: "string",
+                  enum: ["square_hd", "square", "portrait_4_3", "auto"],
+                },
+                {
+                  type: "object",
+                  properties: {
+                    width: { type: "integer" },
+                    height: { type: "integer" },
+                  },
+                },
+              ],
+              default: "auto",
+            },
           }),
         ],
       };
@@ -236,9 +252,17 @@ test("enum options determine the normalized select value type for mixed schemas"
       label: "Image size",
       description: "",
       required: false,
-      type: "string",
-      control: "select",
-      options: ["square_hd", "square", "portrait_4_3", "auto"],
+      type: "union",
+      control: "json",
+      default: "auto",
+    },
+    {
+      name: "reversed_image_size",
+      label: "Reversed image size",
+      description: "",
+      required: false,
+      type: "union",
+      control: "json",
       default: "auto",
     },
   ]);
@@ -470,8 +494,16 @@ test("models with required structured parameters remain available", async (t) =>
       description: "",
       required: true,
       type: "array",
-      control: "json",
+      control: "list",
       minItems: 1,
+      item: {
+        name: "item",
+        label: "Item",
+        description: "",
+        required: true,
+        type: "object",
+        control: "json",
+      },
     },
   ]);
 });
